@@ -2,9 +2,9 @@ name: CMW Tender Monitor
 
 on:
   schedule:
-    # 07:00 and 13:00 Eastern on weekdays (12:00 and 18:00 UTC)
-    - cron: "0 12 * * 1-5"
-    - cron: "0 18 * * 1-5"
+    # 10:00 and 15:00 Eastern on weekdays (14:00 and 19:00 UTC)
+    - cron: "0 14 * * 1-5"
+    - cron: "0 19 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   monitor:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     environment:
       name: ${{ (github.event.inputs.dry_run == 'true') && 'dry-run' || 'github-pages' }}
       url: ${{ steps.pages.outputs.page_url }}
