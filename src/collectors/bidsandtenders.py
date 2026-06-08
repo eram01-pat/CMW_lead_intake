@@ -299,7 +299,12 @@ def _search_page(
 
     ct = r.headers.get("Content-Type", "")
     if "json" not in ct:
-        raise RuntimeError(f"Expected JSON, got {ct!r} from {url}")
+        snippet = r.text[:400].replace("\n", " ").replace("\r", "")
+        raise RuntimeError(
+            f"Expected JSON, got {ct!r} from {url}\n"
+            f"  Status: {r.status_code}  Final URL: {r.url}\n"
+            f"  Body snippet: {snippet!r}"
+        )
 
     body = r.json()
     return body.get("data") or [], int(body.get("total") or 0)
