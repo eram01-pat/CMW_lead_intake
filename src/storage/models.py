@@ -11,18 +11,22 @@ class Tender:
     source_name: str
     title: str
     description: str
-    category: str
+    category: str           # bid type prefix: RFP / T / RFPQ / RFEOI
     reference_no: str
     detail_url: str
     status: str
     posted_date: Optional[date]
     closing_date: Optional[date]
     raw: dict
+    bid_categories: list[str] = field(default_factory=list)  # from <div id="divCat">
     first_seen_at: datetime = field(default_factory=datetime.utcnow)
     last_seen_at: datetime = field(default_factory=datetime.utcnow)
 
     def raw_json(self) -> str:
         return json.dumps(self.raw, default=str)
+
+    def bid_categories_json(self) -> str:
+        return json.dumps(self.bid_categories)
 
 
 @dataclass

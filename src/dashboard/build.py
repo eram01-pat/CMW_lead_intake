@@ -108,6 +108,7 @@ def build(
     for row in rows:
         keywords = json.loads(row["matched_keywords"])
         cats = json.loads(row["categories"])
+        bid_cats = json.loads(row["bid_categories"] or "[]")
 
         days = _days_until(row["closing_date"])
         first_seen = row["first_seen_at"]
@@ -129,6 +130,7 @@ def build(
             "reference_no":   row["reference_no"] or "",
             "category":       row["category"] or "",
             "category_label": cat_label,
+            "bid_categories": bid_cats,
             "posted_date":    row["posted_date"],
             "closing_date":   row["closing_date"],
             "confidence":     row["confidence"],

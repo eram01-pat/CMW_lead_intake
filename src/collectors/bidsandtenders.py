@@ -339,36 +339,68 @@ def _fetch_all_pages(
 
 # ── Detail page ───────────────────────────────────────────────────────────────
 
-def _fetch_detail_description(
+def _extract_categories_from_html(html: str) -> list[str]:
+    """
+    Extract bid category strings from <div id="divCat"> in the detail page.
+
+    Confirmed HTML structure (vaughan.bidsandtenders.ca):
+      <div id="divCat">
+        <ul class="tree">
+          <li class="first">Parent Category<ul>
+            <li>Child Category</li>
+            ...
+          </ul></li>
+          ...
+        </ul>
+      </div>
+
+    Returns a flat deduplicated list of all parent and child category names.
+    """
+    m = re.search(
+        r'<div[^>]*\bid="divCat"[^>]*>(.*?)</div>',
+        html, re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return []
+
+    div_content = m.group(1)
+
+    # Capture each <li>'s immediate text — stop before any nested <ul> or </li>
+    seen: set[str] = set()
+    categories: list[str] = []
+    for hit in re.finditer(
+        r"<li[^>]*>(.*?)(?=<ul|</li>)", div_content, re.DOTALL | re.IGNORECASE
+    ):
+        text = _strip_html(hit.group(1)).strip()
+        if text and text not in seen:
+            seen.add(text)
+            categories.append(text)
+
+    return categories
+
+
+def _fetch_detail_page(
     session: requests.Session,
     detail_url: str,
     timeout: int,
     rate_limit: float,
-) -> str:
-    """Fetch the tender detail page; return plain-text description (best-effort)."""
+) -> list[str]:
+    """
+    Fetch a tender detail page and return its bid categories.
+    Description is confirmed boilerplate on this platform — we skip it.
+    Returns [] on any error (non-blocking).
+    """
     try:
         r = session.get(detail_url, timeout=timeout,
                         headers={"Accept": "text/html,*/*"})
         if r.status_code != 200:
-            return ""
+            logger.debug("Detail page %s returned %s", detail_url, r.status_code)
+            return []
         time.sleep(rate_limit)
-        html = r.text
-        # Try common eSolutionsGroup description container patterns
-        for pat in [
-            r'id="[^"]*[Dd]escription[^"]*"[^>]*>(.*?)</(?:div|section|article)',
-            r'class="[^"]*[Dd]escription[^"]*"[^>]*>(.*?)</(?:div|section)',
-            r'class="[^"]*[Ss]cope[^"]*"[^>]*>(.*?)</(?:div|section)',
-            r'class="[^"]*tender-detail[^"]*"[^>]*>(.*?)</(?:div|section)',
-        ]:
-            m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
-            if m:
-                text = _strip_html(m.group(1))
-                if text and not _is_boilerplate(text) and len(text) > 50:
-                    return text
-        return ""
+        return _extract_categories_from_html(r.text)
     except Exception as exc:
         logger.debug("Detail fetch error %s: %s", detail_url, exc)
-        return ""
+        return []
 
 
 # ── Item parsing ──────────────────────────────────────────────────────────────
@@ -404,9 +436,12 @@ def _parse_item(
         ref_no     = _extract_ref_no(title)
         detail_url = f"{base_url}{_DETAIL_PATH}/{platform_id}"
 
-        description = _strip_html(str(item.get("Description") or ""))
-        if _is_boilerplate(description) and fetch_details:
-            description = _fetch_detail_description(session, detail_url, timeout, rate_limit)
+        # Description is confirmed boilerplate on this platform; ignore it.
+        description = ""
+
+        bid_categories: list[str] = []
+        if fetch_details:
+            bid_categories = _fetch_detail_page(session, detail_url, timeout, rate_limit)
 
         # BidClassification (e.g. "Services", "Goods", "Construction") comes from
         # the detail page HTML, not the listing API. Stored empty for now.
@@ -419,13 +454,14 @@ def _parse_item(
             source_name=source_name,
             title=title,
             description=description,
-            category=bid_type,   # RFP, T, RFPQ, RFEOI — best available at listing level
+            category=bid_type,
             reference_no=ref_no,
             detail_url=detail_url,
             status=str(item.get("Status") or "Open").strip(),
             posted_date=_parse_aspnet_date(item.get("DateAvailable")),
             closing_date=_parse_aspnet_date(item.get("DateClosing")),
             raw=item,
+            bid_categories=bid_categories,
         )
     except Exception as exc:
         logger.warning("Failed to parse item %r: %s", item.get("Id"), exc)

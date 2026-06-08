@@ -5,8 +5,13 @@ Tier 1 — high precision: literal/stemmed hit → High confidence (auto-flag)
 Tier 2 — disambiguate:   hit must pass disqualifiers → Medium confidence
 Tier 3 — broad net:      hit must pass disqualifiers AND LLM says yes (or goes to Review)
 
+Category signals (from <div id="divCat"> on each tender's detail page):
+  - Suppress: bid is in a category that is clearly not CMW scope (Medical, IT, etc.)
+  - Boost:    bid is in a category associated with CMW services (Fleet, Public Works, etc.)
+
 Scoring:
   score = tier_weight + keyword_count * keyword_bonus + category_diversity * cat_bonus
+          + category_boost
   mapped to confidence: score >= high_threshold → High, >= medium_threshold → Medium, else Review
 """
 
@@ -21,12 +26,67 @@ from src.storage.models import Match, Tender
 
 logger = logging.getLogger(__name__)
 
+# ── Bid category signals ──────────────────────────────────────────────────────
+# These are partial-match strings against the category names from divCat.
+# Confirm and expand after the first production run reveals the full taxonomy.
+
+# A keyword match on a tender in one of these categories is suppressed entirely
+# (regardless of tier) — these are unambiguously not CMW scope.
+_CATEGORY_SUPPRESSORS = [
+    "medical", "dental", "health service", "health program",
+    "pharmaceutical", "nursing", "long term care", "ltc",
+    "information technology", "software", "hardware", "it service",
+    "telecommunications", "network infrastructure",
+    "legal service", "legal counsel", "legal support",
+    "financial service", "accounting", "audit",
+    "human resource", "staffing", "recruitment",
+    "catering", "food service", "cafeteria",
+    "insurance",
+    "community funding", "grants",
+    "library service",
+]
+
+# A tender in one of these categories gets a score bonus — these correlate with
+# CMW services and reduce false positives for Tier-2/3 keyword hits.
+_CATEGORY_BOOSTERS = [
+    "fleet", "vehicle", "transit", "bus",
+    "public works", "roads", "highway", "transportation",
+    "facility maintenance", "building maintenance", "maintenance service",
+    "cleaning", "janitorial",          # janitorial is normally a disqualifier in text
+    "parking", "garage",               #   but as a category it may contain CMW work
+    "environmental service",
+    "waste", "sanitation",
+    "parks", "recreation facility",
+    "fire service", "emergency service",
+]
+
+_CATEGORY_BOOST_SCORE = 3
+
+
+def _check_bid_categories(
+    bid_categories: list[str],
+) -> tuple[bool, bool]:
+    """
+    Returns (should_suppress, should_boost).
+    Checked against the platform's category taxonomy from divCat.
+    """
+    cats_lower = " | ".join(bid_categories).lower()
+
+    for term in _CATEGORY_SUPPRESSORS:
+        if term in cats_lower:
+            return True, False
+
+    for term in _CATEGORY_BOOSTERS:
+        if term in cats_lower:
+            return False, True
+
+    return False, False
+
 
 def load_keywords(keywords_path: str) -> list[dict]:
     with open(keywords_path) as f:
         data = yaml.safe_load(f)
     keywords = data.get("keywords", [])
-    # Pre-compile each keyword's regex pattern
     for kw in keywords:
         kw["_pattern"] = keyword_pattern(kw["keyword"])
     return keywords
@@ -42,11 +102,6 @@ def load_disqualifiers(disqualifiers_path: str) -> list[dict]:
 
 
 def _check_disqualifiers(text: str, disqualifiers: list[dict]) -> tuple[bool, str]:
-    """
-    Returns (should_suppress, action).
-    - suppress: remove the match entirely
-    - downgrade: reduce confidence one band
-    """
     norm = normalize(text)
     for d in disqualifiers:
         if d["_pattern"].search(norm):
@@ -94,57 +149,59 @@ def match_tender(
     if not matched:
         return None
 
-    # Split by tier
     tiers_hit = {kw["tier"] for kw in matched}
-    top_tier = min(tiers_hit)  # lowest number = highest priority
+    top_tier = min(tiers_hit)
 
-    # Check disqualifiers against full text
-    hits_suppress, action = _check_disqualifiers(search_text, disqualifiers)
+    # ── Bid category signals ──────────────────────────────────────────────────
+    cat_suppress, cat_boost = _check_bid_categories(tender.bid_categories)
 
-    # Tier-1 hits are never fully suppressed — a strong specific signal (fleet wash,
-    # graffiti, parkade) survives even if the tender also mentions janitorial work.
-    # Suppress only applies to Tier-2/3-only matches.
-    if hits_suppress and action == "suppress" and top_tier > 1:
-        logger.debug("Tender %s suppressed by disqualifier", tender.id)
+    if cat_suppress:
+        logger.debug(
+            "Tender %s suppressed by bid category: %s",
+            tender.id, tender.bid_categories,
+        )
         return None
-    if hits_suppress and action == "suppress" and top_tier == 1:
-        # Treat suppress as downgrade when Tier-1 hit is present
-        action = "downgrade"
 
-    # Compute score
+    # ── Text disqualifiers ────────────────────────────────────────────────────
+    hits_disq, disq_action = _check_disqualifiers(search_text, disqualifiers)
+
+    # Tier-1 hits survive text disqualifiers (downgraded, not suppressed)
+    if hits_disq and disq_action == "suppress" and top_tier > 1:
+        logger.debug("Tender %s suppressed by text disqualifier", tender.id)
+        return None
+    if hits_disq and disq_action == "suppress" and top_tier == 1:
+        disq_action = "downgrade"
+
+    # ── Scoring ───────────────────────────────────────────────────────────────
     tier_weight = tier_weights.get(str(top_tier), tier_weights.get(top_tier, 1))
-    categories_hit = list({kw["category"] for kw in matched})
+    kw_categories_hit = list({kw["category"] for kw in matched})
     score = (
         tier_weight
         + len(matched) * keyword_bonus
-        + (len(categories_hit) - 1) * category_diversity_bonus
+        + (len(kw_categories_hit) - 1) * category_diversity_bonus
     )
 
-    # LLM relevance bonus
+    if cat_boost:
+        score += _CATEGORY_BOOST_SCORE
+
     if relevance_label == "yes" and top_tier >= 2:
         score += relevance_bonus
 
-    # Map to confidence
     confidence = _confidence_from_score(score, confidence_thresholds)
 
-    # Downgrade on disqualifier "downgrade" action
-    if hits_suppress and action == "downgrade":
+    if hits_disq and disq_action == "downgrade":
         confidence = _downgrade_confidence(confidence)
 
-    # Tier-3-only with LLM disabled → always Review regardless of score
+    # Tier-3-only: keep in Review unless LLM confirms
     if tiers_hit == {3} and relevance_label is None:
         confidence = "Review"
-
-    # Tier-3-only where LLM said "no"
     if tiers_hit == {3} and relevance_label == "no":
         return None
 
-    matched_keyword_strs = [kw["keyword"] for kw in matched]
-
     return Match(
         tender_id=tender.id,
-        matched_keywords=matched_keyword_strs,
-        categories=categories_hit,
+        matched_keywords=[kw["keyword"] for kw in matched],
+        categories=kw_categories_hit,
         top_tier=top_tier,
         score=score,
         confidence=confidence,

@@ -10,11 +10,11 @@ crawl:
   # Max tenders to fetch per source per run (0 = no limit). Useful for dev/test.
   max_per_source: 0
   user_agent: "CMWTenderMonitor/1.0 (Canadian Mobile Wash procurement monitor; contact eramasra@patlon.com)"
-  # Fetch individual detail pages to enrich description text.
-  # Confirmed: descriptions are boilerplate even on detail pages for this platform
-  # (real scope is in PDFs). Disable to avoid ~17min of rate-limited requests per run.
-  # Re-enable if a future platform change provides real description text.
-  fetch_detail_pages: false
+  # Fetch individual detail pages to extract bid category tags (<div id="divCat">).
+  # Categories are used for pre-filtering (suppress Medical/IT/etc.) and confidence
+  # boosting (Fleet/Maintenance/Public Works/etc.). Descriptions remain boilerplate.
+  # Cost: ~3s per new tender on first run; negligible on subsequent runs (cached).
+  fetch_detail_pages: true
 
 matching:
   # Tier weights for scoring

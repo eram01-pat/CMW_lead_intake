@@ -17,20 +17,21 @@ from src.storage.models import Match, Tender
 
 DDL = """
 CREATE TABLE IF NOT EXISTS tenders (
-    id             TEXT PRIMARY KEY,
-    source_id      TEXT NOT NULL,
-    source_name    TEXT NOT NULL,
-    title          TEXT NOT NULL,
-    description    TEXT,
-    category       TEXT,
-    reference_no   TEXT,
-    detail_url     TEXT NOT NULL,
-    status         TEXT,
-    posted_date    DATE,
-    closing_date   DATE,
-    raw            JSON,
-    first_seen_at  TIMESTAMP NOT NULL,
-    last_seen_at   TIMESTAMP NOT NULL
+    id              TEXT PRIMARY KEY,
+    source_id       TEXT NOT NULL,
+    source_name     TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    description     TEXT,
+    category        TEXT,
+    reference_no    TEXT,
+    detail_url      TEXT NOT NULL,
+    status          TEXT,
+    posted_date     DATE,
+    closing_date    DATE,
+    raw             JSON,
+    bid_categories  JSON,
+    first_seen_at   TIMESTAMP NOT NULL,
+    last_seen_at    TIMESTAMP NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS matches (
@@ -70,9 +71,17 @@ def get_connection(db_path: str) -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply additive schema migrations without dropping data."""
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(tenders)")}
+    if "bid_categories" not in existing_cols:
+        conn.execute("ALTER TABLE tenders ADD COLUMN bid_categories JSON")
+
+
 def init_db(db_path: str) -> None:
     with get_connection(db_path) as conn:
         conn.executescript(DDL)
+        _migrate(conn)
 
 
 def upsert_tender(conn: sqlite3.Connection, tender: Tender) -> bool:
@@ -85,22 +94,23 @@ def upsert_tender(conn: sqlite3.Connection, tender: Tender) -> bool:
     if existing:
         conn.execute(
             """UPDATE tenders SET
-                title         = ?,
-                description   = ?,
-                category      = ?,
-                reference_no  = ?,
-                detail_url    = ?,
-                status        = ?,
-                posted_date   = ?,
-                closing_date  = ?,
-                raw           = ?,
-                last_seen_at  = ?
+                title          = ?,
+                description    = ?,
+                category       = ?,
+                reference_no   = ?,
+                detail_url     = ?,
+                status         = ?,
+                posted_date    = ?,
+                closing_date   = ?,
+                raw            = ?,
+                bid_categories = ?,
+                last_seen_at   = ?
             WHERE id = ?""",
             (
                 tender.title, tender.description, tender.category,
                 tender.reference_no, tender.detail_url, tender.status,
                 tender.posted_date, tender.closing_date,
-                tender.raw_json(), now,
+                tender.raw_json(), tender.bid_categories_json(), now,
                 tender.id,
             ),
         )
@@ -110,14 +120,14 @@ def upsert_tender(conn: sqlite3.Connection, tender: Tender) -> bool:
             """INSERT INTO tenders (
                 id, source_id, source_name, title, description, category,
                 reference_no, detail_url, status, posted_date, closing_date,
-                raw, first_seen_at, last_seen_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                raw, bid_categories, first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 tender.id, tender.source_id, tender.source_name,
                 tender.title, tender.description, tender.category,
                 tender.reference_no, tender.detail_url, tender.status,
                 tender.posted_date, tender.closing_date,
-                tender.raw_json(), now, now,
+                tender.raw_json(), tender.bid_categories_json(), now, now,
             ),
         )
         return True
@@ -147,6 +157,7 @@ def get_open_matched_tenders(conn: sqlite3.Connection) -> list[dict]:
             t.id, t.source_id, t.source_name, t.title, t.description,
             t.category, t.reference_no, t.detail_url, t.status,
             t.posted_date, t.closing_date, t.first_seen_at,
+            t.bid_categories,
             m.matched_keywords, m.categories, m.top_tier,
             m.score, m.confidence, m.relevance_label
         FROM tenders t

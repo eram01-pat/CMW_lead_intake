@@ -41,6 +41,8 @@
   .snippet mark { background: #fef9c3; color: inherit; padding: 0 2px; border-radius: 2px; }
   .keywords { font-size: 0.75rem; color: #6b7280; }
   .keywords span { display: inline-block; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 3px; padding: 1px 6px; margin: 2px 2px 0 0; }
+  .bid-cats { font-size: 0.72rem; color: #9ca3af; margin-top: 0.3rem; }
+  .bid-cats span { display: inline-block; background: #f9fafb; border: 1px solid #f3f4f6; border-radius: 3px; padding: 1px 5px; margin: 1px 2px 0 0; }
   .review-note { font-size: 0.8rem; color: var(--review); background: var(--review-bg); border: 1px solid #e5e7eb; border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
   .empty { text-align: center; color: #9ca3af; padding: 3rem; }
   footer { text-align: center; padding: 2rem; font-size: 0.75rem; color: #9ca3af; }
@@ -112,6 +114,12 @@
         Matched:
         {% for kw in t.matched_keywords %}<span>{{ kw }}</span>{% endfor %}
       </div>
+      {% if t.bid_categories %}
+      <div class="bid-cats">
+        Categories:
+        {% for cat in t.bid_categories %}<span>{{ cat }}</span>{% endfor %}
+      </div>
+      {% endif %}
     </div>
     {% endfor %}
   {% else %}
@@ -148,6 +156,11 @@
     <div class="keywords">
       Matched: {% for kw in t.matched_keywords %}<span>{{ kw }}</span>{% endfor %}
     </div>
+    {% if t.bid_categories %}
+    <div class="bid-cats">
+      Categories: {% for cat in t.bid_categories %}<span>{{ cat }}</span>{% endfor %}
+    </div>
+    {% endif %}
   </div>
   {% endfor %}
   {% endif %}
