@@ -1,0 +1,134 @@
+# CMW Tender Keyword Library
+# Generated from data/CMW_Tender_Keywords.xlsx
+# Run: python scripts/generate_keywords.py  (regenerates this file from the xlsx)
+#
+# IMPORTANT: Confirm disqualifiers.yaml with CMW before going live.
+#
+# Schema per keyword:
+#   keyword: str
+#   category: int  (1-6, see categories below)
+#   tier: int      (1=high-precision, 2=disambiguate, 3=broad-net)
+#   notes: str     (optional; explain ambiguity or edge cases)
+#
+# Categories:
+#   1 = Fleet & vehicle washing
+#   2 = Parking-structure & floor cleaning
+#   3 = Pressure-washing & building exterior
+#   4 = Graffiti & specialty surface
+#   5 = Industrial / facility cleaning
+#   6 = Municipal / contract umbrella
+
+keywords:
+
+  # ── Tier 1 — high precision, auto-flag ──────────────────────────────────────
+
+  - {keyword: "fleet washing",              category: 1, tier: 1}
+  - {keyword: "fleet wash",                 category: 1, tier: 1}
+  - {keyword: "truck washing",              category: 1, tier: 1}
+  - {keyword: "truck wash",                 category: 1, tier: 1}
+  - {keyword: "trailer washing",            category: 1, tier: 1}
+  - {keyword: "trailer wash",               category: 1, tier: 1}
+  - {keyword: "vehicle washing",            category: 1, tier: 1}
+  - {keyword: "transit bus washing",        category: 1, tier: 1}
+  - {keyword: "transit bus wash",           category: 1, tier: 1}
+  - {keyword: "bus washing",                category: 1, tier: 1}
+  - {keyword: "bus wash",                   category: 1, tier: 1}
+  - {keyword: "garbage truck washing",      category: 1, tier: 1}
+  - {keyword: "refuse truck washing",       category: 1, tier: 1}
+  - {keyword: "refuse truck wash",          category: 1, tier: 1}
+  - {keyword: "municipal fleet",            category: 1, tier: 1}
+  - {keyword: "undercarriage washing",      category: 1, tier: 1}
+  - {keyword: "undercarriage wash",         category: 1, tier: 1}
+  - {keyword: "undercarriage cleaning",     category: 1, tier: 1}
+  - {keyword: "salt removal",               category: 1, tier: 1}
+  - {keyword: "de-icing wash",              category: 1, tier: 1}
+  - {keyword: "fire truck washing",         category: 1, tier: 1}
+  - {keyword: "heavy equipment washing",    category: 1, tier: 1}
+  - {keyword: "heavy equipment wash",       category: 1, tier: 1}
+
+  - {keyword: "parkade cleaning",           category: 2, tier: 1}
+  - {keyword: "parking garage cleaning",    category: 2, tier: 1}
+  - {keyword: "parking structure cleaning", category: 2, tier: 1}
+  - {keyword: "parking structure washing",  category: 2, tier: 1}
+  - {keyword: "parking deck cleaning",      category: 2, tier: 1}
+  - {keyword: "floor scrubbing",            category: 2, tier: 1}
+  - {keyword: "concrete floor cleaning",    category: 2, tier: 1}
+
+  - {keyword: "pressure washing",           category: 3, tier: 1}
+  - {keyword: "pressure wash",              category: 3, tier: 1}
+  - {keyword: "power washing",              category: 3, tier: 1}
+  - {keyword: "power wash",                 category: 3, tier: 1}
+  - {keyword: "hydro washing",              category: 3, tier: 1}
+  - {keyword: "high pressure washing",      category: 3, tier: 1}
+  - {keyword: "high pressure cleaning",     category: 3, tier: 1}
+  - {keyword: "exterior washing",           category: 3, tier: 1}
+  - {keyword: "exterior wash",              category: 3, tier: 1}
+  - {keyword: "post-construction cleaning", category: 3, tier: 1}
+  - {keyword: "post construction cleaning", category: 3, tier: 1}
+  - {keyword: "drive-thru washing",         category: 3, tier: 1}
+  - {keyword: "drive through washing",      category: 3, tier: 1}
+  - {keyword: "sidewalk washing",           category: 3, tier: 1}
+  - {keyword: "sidewalk cleaning",          category: 3, tier: 1}
+
+  - {keyword: "graffiti removal",           category: 4, tier: 1}
+  - {keyword: "graffiti cleaning",          category: 4, tier: 1}
+  - {keyword: "graffiti abatement",         category: 4, tier: 1}
+  - {keyword: "anti-graffiti",              category: 4, tier: 1}
+  - {keyword: "dumpster pad cleaning",      category: 5, tier: 1}
+  - {keyword: "dumpster pad washing",       category: 5, tier: 1}
+  - {keyword: "catch basin cleaning",       category: 5, tier: 1}
+  - {keyword: "catch basin washing",        category: 5, tier: 1}
+  - {keyword: "bin washing",                category: 5, tier: 1}
+  - {keyword: "bin cleaning",               category: 5, tier: 1}
+  - {keyword: "steam cleaning",             category: 5, tier: 1}
+  - {keyword: "steam wash",                 category: 5, tier: 1}
+  - {keyword: "degreasing",                 category: 5, tier: 1}
+  - {keyword: "degreaser",                  category: 5, tier: 1}
+  - {keyword: "industrial washing",         category: 5, tier: 1}
+  - {keyword: "industrial wash",            category: 5, tier: 1}
+
+  # ── Tier 2 — disambiguate; must pass disqualifiers + optional LLM pass ──────
+
+  - {keyword: "vehicle cleaning",           category: 1, tier: 2}
+  - {keyword: "equipment cleaning",         category: 5, tier: 2}
+  - {keyword: "machinery cleaning",         category: 5, tier: 2}
+  - {keyword: "surface washing",            category: 3, tier: 2}
+  - {keyword: "surface cleaning",           category: 3, tier: 2}
+  - {keyword: "exterior cleaning",          category: 3, tier: 2}
+  - {keyword: "building washing",           category: 3, tier: 2}
+  - {keyword: "building cleaning",          category: 3, tier: 2, notes: "can match janitorial; check disqualifiers"}
+  - {keyword: "structure cleaning",         category: 3, tier: 2}
+  - {keyword: "industrial cleaning",        category: 5, tier: 2}
+  - {keyword: "facility washing",           category: 5, tier: 2}
+  - {keyword: "floor cleaning",             category: 2, tier: 2}
+  - {keyword: "concrete cleaning",          category: 2, tier: 2}
+  - {keyword: "pavement cleaning",          category: 3, tier: 2}
+  - {keyword: "road cleaning",              category: 3, tier: 2}
+  - {keyword: "infrastructure cleaning",    category: 6, tier: 2}
+  - {keyword: "wash bay",                   category: 1, tier: 2}
+  - {keyword: "wash station",               category: 1, tier: 2}
+  - {keyword: "mobile washing",             category: 1, tier: 2}
+  - {keyword: "mobile wash",                category: 1, tier: 2}
+  - {keyword: "sanitizing",                 category: 5, tier: 2, notes: "often medical/food; check disqualifiers"}
+  - {keyword: "disinfection",               category: 5, tier: 2, notes: "often medical; check disqualifiers"}
+  - {keyword: "surface treatment",          category: 3, tier: 2}
+
+  # ── Tier 3 — broad net; Tier-3-only hits go to Review bucket ────────────────
+  # A bare hit here means nothing without disqualifiers passing AND LLM confirming.
+
+  - {keyword: "cleaning services",                  category: 6, tier: 3}
+  - {keyword: "exterior cleaning services",         category: 6, tier: 3}
+  - {keyword: "contract cleaning services",         category: 6, tier: 3}
+  - {keyword: "maintenance contract",               category: 6, tier: 3}
+  - {keyword: "service agreement",                  category: 6, tier: 3}
+  - {keyword: "multi-year cleaning contract",       category: 6, tier: 3}
+  - {keyword: "operational services",               category: 6, tier: 3}
+  - {keyword: "site services",                      category: 6, tier: 3}
+  - {keyword: "environmental services",             category: 6, tier: 3}
+  - {keyword: "building maintenance services",      category: 6, tier: 3}
+  - {keyword: "property maintenance services",      category: 6, tier: 3}
+  - {keyword: "commercial property cleaning",       category: 6, tier: 3}
+  - {keyword: "facility maintenance cleaning",      category: 6, tier: 3}
+  - {keyword: "municipal cleaning services",        category: 6, tier: 3}
+  - {keyword: "public infrastructure cleaning",     category: 6, tier: 3}
+  - {keyword: "infrastructure washing",             category: 6, tier: 3}

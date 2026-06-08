@@ -1,0 +1,49 @@
+crawl:
+  # Seconds between requests to the same host. Be polite.
+  rate_limit_seconds: 3
+  # Max retries per page on network/5xx errors before marking the source failed.
+  max_retries: 3
+  # Seconds for exponential backoff base (retry wait = base * 2^attempt)
+  backoff_base_seconds: 5
+  # Request timeout in seconds
+  timeout_seconds: 30
+  # Max tenders to fetch per source per run (0 = no limit). Useful for dev/test.
+  max_per_source: 0
+  user_agent: "CMWTenderMonitor/1.0 (Canadian Mobile Wash procurement monitor; contact eramasra@patlon.com)"
+
+matching:
+  # Tier weights for scoring
+  tier_weights: {1: 10, 2: 5, 3: 1}
+  # Per matched-keyword bonus
+  keyword_match_bonus: 2
+  # Category bonus (matching multiple categories signals broader scope)
+  category_diversity_bonus: 1
+  # Confidence bands: score >= threshold -> label
+  confidence_thresholds:
+    # Tier-1 single hit: score = 10 (weight) + 2 (1 keyword bonus) = 12 → High
+    # Tier-2 single hit: score =  5 (weight) + 2 (1 keyword bonus) =  7 → Medium
+    # Tier-3 single hit: score =  1 (weight) + 2 (1 keyword bonus) =  3 → Review
+    high:   10
+    medium:  5
+    review:  0
+
+llm:
+  # Set to true to enable the Anthropic relevance pass (requires ANTHROPIC_API_KEY env var).
+  enabled: false
+  # Only run LLM on tenders that hit Tier-2 or Tier-3 keywords (never all tenders).
+  tiers_to_adjudicate: [2, 3]
+  model: "claude-haiku-4-5-20251001"
+  max_tokens: 256
+  # LLM relevance bonus added to score when LLM says "yes"
+  relevance_bonus: 8
+
+storage:
+  # Path to SQLite database (relative to repo root). Used by both pipeline and CI.
+  db_path: "data/tenders.db"
+
+dashboard:
+  output_path: "docs/index.html"
+  # Number of days before closing date to show "closing soon" badge
+  closing_soon_days: 7
+  # Max description snippet length (chars)
+  snippet_length: 400
