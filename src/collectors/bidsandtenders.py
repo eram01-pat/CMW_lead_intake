@@ -3,25 +3,14 @@ Parameterized collector for the bids&tenders.ca (eSolutionsGroup) platform.
 
 All 17 municipalities share this one collector — only base_url differs.
 
-Confirmed API (verified on vaughan.bidsandtenders.ca, 2026-06-08):
-
-  Step 1 — GET {base_url}/Module/Tenders/en
-           Obtain session cookies + CSRF token (__RequestVerificationToken)
-           from the hidden input in the HTML. Also extract the MODULE_GUID
-           from the form action or a JS variable in the page source.
-
-  Step 2 — POST {base_url}/Module/Tenders/en/Tender/Search/{MODULE_GUID}
-                ?status=Open&limit=100&start=0&dir=ASC&sort=DateClosing%20ASC,Id
-           Content-Type: application/x-www-form-urlencoded
-           Body: status=Open&limit=100&start=0&dir=ASC&from=&to=
-                 &sort=DateClosing+ASC%2CId
-                 &__RequestVerificationToken={TOKEN}
+Search API (GET — no CSRF token required for read-only search):
+  GET {base_url}/Module/Tenders/en/Tender/Search/{guid}
+      ?status=Open&limit=100&start=0&dir=ASC&from=&to=&sort=DateClosing+ASC,Id
 
   Response: {"success": true, "data": [...], "total": N}
   Dates: /Date(ms)/ — Unix milliseconds (ASP.NET JSON date format)
-  Descriptions: boilerplate at listing level; real scope is on the detail page.
 
-See ACCESS_NOTES.md for full discovery findings.
+Module GUIDs are pre-seeded in data/module_endpoints.yaml.
 """
 
 import hashlib
@@ -44,18 +33,13 @@ from src.storage.models import Tender
 logger = logging.getLogger(__name__)
 
 _LISTING_PATH = "/Module/Tenders/en"
-_DETAIL_PATH  = "/Module/Tenders/en/Tender/Detail"    # confirmed: singular "Detail"
+_DETAIL_PATH  = "/Module/Tenders/en/Tender/Detail"
 _CACHE_FILE   = "data/module_endpoints.yaml"
 _PAGE_LIMIT   = 100
 
-# Listing-level Description is just this boilerplate
 _BOILERPLATE_RE = re.compile(r"only\s+online\s+submissions", re.IGNORECASE)
-
-# Reference prefix in Title: "T26-180 - Some Title" → "T26-180"
-_REF_PREFIX_RE = re.compile(r"^([A-Z]{1,8}\d{2}-\d{2,5}[A-Z]?)\s*[-–]\s*", re.IGNORECASE)
-
-# GUID pattern
-_GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+_REF_PREFIX_RE  = re.compile(r"^([A-Z]{1,8}\d{2}-\d{2,5}[A-Z]?)\s*[-–]\s*", re.IGNORECASE)
+_GUID_RE        = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
 # ── Date parsing ──────────────────────────────────────────────────────────────
@@ -97,46 +81,18 @@ def _strip_html(html: str) -> str:
     return p.get_text()
 
 
-def _is_boilerplate(text: str) -> bool:
-    return not text or bool(_BOILERPLATE_RE.search(text))
-
-
-def _extract_csrf_token(html: str) -> Optional[str]:
-    """Extract __RequestVerificationToken from a hidden input."""
-    m = re.search(
-        r'<input[^>]+name="__RequestVerificationToken"[^>]+value="([^"]+)"',
-        html, re.IGNORECASE,
-    )
-    if m:
-        return m.group(1)
-    # Some ASP.NET versions put it in a meta tag
-    m = re.search(
-        r'<meta[^>]+name="__RequestVerificationToken"[^>]+content="([^"]+)"',
-        html, re.IGNORECASE,
-    )
-    return m.group(1) if m else None
-
-
-def _extract_module_guid(html: str, base_url: str) -> Optional[str]:
-    """
-    Find the MODULE_GUID embedded in the listing page.
-    Looks for /Tender/Search/{GUID} in form action attributes or JS variables.
-    """
-    # Form action containing the search path
+def _extract_module_guid(html: str) -> Optional[str]:
     m = re.search(
         r'/Module/Tenders/en/Tender/Search/(' + _GUID_RE.pattern + r')',
         html, re.IGNORECASE,
     )
     if m:
         return m.group(1)
-    # JavaScript variable assignment
     m = re.search(
         r'["\'](?:/[^"\']*)?/Tender/Search/(' + _GUID_RE.pattern + r')["\']',
         html, re.IGNORECASE,
     )
-    if m:
-        return m.group(1)
-    return None
+    return m.group(1) if m else None
 
 
 # ── Session / requests helpers ────────────────────────────────────────────────
@@ -159,12 +115,12 @@ def _get_with_retry(
     timeout: int,
     max_retries: int,
     backoff_base: float,
+    accept: str = "text/html,application/xhtml+xml,*/*",
 ) -> requests.Response:
     last: Optional[Exception] = None
     for attempt in range(max_retries + 1):
         try:
-            r = session.get(url, timeout=timeout,
-                            headers={"Accept": "text/html,application/xhtml+xml,*/*"})
+            r = session.get(url, timeout=timeout, headers={"Accept": accept})
             if r.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
                 _backoff(attempt, backoff_base, r.status_code, url)
                 continue
@@ -177,56 +133,13 @@ def _get_with_retry(
     raise RuntimeError(f"GET {url} failed after {max_retries + 1} attempts: {last}")
 
 
-def _post_with_retry(
-    session: requests.Session,
-    url: str,
-    data: dict,
-    timeout: int,
-    max_retries: int,
-    backoff_base: float,
-    origin: str = "",
-) -> requests.Response:
-    last: Optional[Exception] = None
-    for attempt in range(max_retries + 1):
-        try:
-            r = session.post(
-                url, data=data, timeout=timeout,
-                allow_redirects=False,
-                headers={
-                    "Accept": "application/json, text/javascript, */*; q=0.01",
-                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Origin": origin,
-                    "Sec-Fetch-Mode": "cors",
-                    "Sec-Fetch-Site": "same-origin",
-                    "Sec-Fetch-Dest": "empty",
-                },
-            )
-            logger.info(
-                "POST %s → %s  Location: %s  CT: %s",
-                url, r.status_code,
-                r.headers.get("Location", "(none)"),
-                r.headers.get("Content-Type", "(none)"),
-            )
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
-                _backoff(attempt, backoff_base, r.status_code, url)
-                continue
-            r.raise_for_status()
-            return r
-        except requests.RequestException as exc:
-            last = exc
-            if attempt < max_retries:
-                _backoff(attempt, backoff_base, None, url)
-    raise RuntimeError(f"POST {url} failed after {max_retries + 1} attempts: {last}")
-
-
 def _backoff(attempt: int, base: float, status: Optional[int], url: str) -> None:
     wait = base * (2 ** attempt)
     logger.warning("HTTP %s from %s — backing off %.1fs", status or "err", url, wait)
     time.sleep(wait)
 
 
-# ── Module GUID + CSRF discovery ──────────────────────────────────────────────
+# ── Module GUID discovery ─────────────────────────────────────────────────────
 
 def _load_cache() -> dict:
     p = Path(_CACHE_FILE)
@@ -238,53 +151,31 @@ def _save_cache(cache: dict) -> None:
     Path(_CACHE_FILE).write_text(yaml.dump(cache, default_flow_style=False))
 
 
-def _load_listing_page(
+def _resolve_guid(
     session: requests.Session,
     base_url: str,
     source_id: str,
     timeout: int,
     max_retries: int,
     backoff_base: float,
-) -> tuple[str, str]:
-    """
-    GET the tenders listing page. Returns (csrf_token, module_guid).
-    Caches the module_guid in data/module_endpoints.yaml.
-    Raises RuntimeError if either cannot be extracted.
-    """
-    listing_url = f"{base_url}{_LISTING_PATH}"
-    session.headers["Referer"] = base_url
-
-    r = _get_with_retry(session, listing_url, timeout, max_retries, backoff_base)
-    html = r.text
-
-    csrf = _extract_csrf_token(html)
-    if not csrf:
-        raise RuntimeError(
-            f"Could not find __RequestVerificationToken in {listing_url}. "
-            "The page structure may have changed."
-        )
-
-    # Check cache first; extract from HTML otherwise
+) -> str:
+    """Return the module GUID from cache or by scraping the listing page."""
     cache = _load_cache()
-    guid = cache.get(source_id) or _extract_module_guid(html, base_url)
+    if source_id in cache:
+        return cache[source_id]
+
+    listing_url = f"{base_url}{_LISTING_PATH}"
+    r = _get_with_retry(session, listing_url, timeout, max_retries, backoff_base)
+    guid = _extract_module_guid(r.text)
     if not guid:
         raise RuntimeError(
             f"Could not find MODULE_GUID in {listing_url}. "
-            "Check ACCESS_NOTES.md and update _extract_module_guid() if needed."
+            "Add it manually to data/module_endpoints.yaml."
         )
-
-    if source_id not in cache:
-        cache[source_id] = guid
-        _save_cache(cache)
-        logger.info("%s: cached module GUID %s", source_id, guid)
-
-    session.headers["Referer"] = listing_url
-    logger.info(
-        "%s: CSRF token=%s...%s  cookies=%s",
-        source_id, csrf[:20], csrf[-8:],
-        {k: v[:12] + "..." for k, v in session.cookies.items()},
-    )
-    return csrf, guid
+    cache[source_id] = guid
+    _save_cache(cache)
+    logger.info("%s: cached module GUID %s", source_id, guid)
+    return guid
 
 
 # ── Core search + pagination ──────────────────────────────────────────────────
@@ -293,7 +184,6 @@ def _search_page(
     session: requests.Session,
     base_url: str,
     guid: str,
-    csrf: str,
     start: int,
     timeout: int,
     max_retries: int,
@@ -304,27 +194,18 @@ def _search_page(
         f"?status=Open&limit={_PAGE_LIMIT}&start={start}"
         f"&dir=ASC&from=&to=&sort=DateClosing+ASC%2CId"
     )
-    data = {
-        "status": "Open",
-        "limit":  str(_PAGE_LIMIT),
-        "start":  str(start),
-        "dir":    "ASC",
-        "from":   "",
-        "to":     "",
-        "sort":   "DateClosing ASC,Id",
-        "__RequestVerificationToken": csrf,
-    }
-    r = _post_with_retry(session, url, data, timeout, max_retries, backoff_base, origin=base_url)
-
+    r = _get_with_retry(
+        session, url, timeout, max_retries, backoff_base,
+        accept="application/json, text/javascript, */*; q=0.01",
+    )
     ct = r.headers.get("Content-Type", "")
     if "json" not in ct:
         snippet = r.text[:400].replace("\n", " ").replace("\r", "")
         raise RuntimeError(
-            f"Expected JSON, got {ct!r} from {url}\n"
-            f"  Status: {r.status_code}  Final URL: {r.url}\n"
-            f"  Body snippet: {snippet!r}"
+            f"Expected JSON from GET search, got {ct!r}\n"
+            f"  Status: {r.status_code}  URL: {url}\n"
+            f"  Body: {snippet!r}"
         )
-
     body = r.json()
     return body.get("data") or [], int(body.get("total") or 0)
 
@@ -333,7 +214,6 @@ def _fetch_all_pages(
     session: requests.Session,
     base_url: str,
     guid: str,
-    csrf: str,
     timeout: int,
     rate_limit: float,
     max_retries: int,
@@ -345,7 +225,7 @@ def _fetch_all_pages(
 
     while True:
         items, total = _search_page(
-            session, base_url, guid, csrf,
+            session, base_url, guid,
             start=start, timeout=timeout,
             max_retries=max_retries, backoff_base=backoff_base,
         )
@@ -365,32 +245,13 @@ def _fetch_all_pages(
 # ── Detail page ───────────────────────────────────────────────────────────────
 
 def _extract_categories_from_html(html: str) -> list[str]:
-    """
-    Extract bid category strings from <div id="divCat"> in the detail page.
-
-    Confirmed HTML structure (vaughan.bidsandtenders.ca):
-      <div id="divCat">
-        <ul class="tree">
-          <li class="first">Parent Category<ul>
-            <li>Child Category</li>
-            ...
-          </ul></li>
-          ...
-        </ul>
-      </div>
-
-    Returns a flat deduplicated list of all parent and child category names.
-    """
     m = re.search(
         r'<div[^>]*\bid="divCat"[^>]*>(.*?)</div>',
         html, re.DOTALL | re.IGNORECASE,
     )
     if not m:
         return []
-
     div_content = m.group(1)
-
-    # Capture each <li>'s immediate text — stop before any nested <ul> or </li>
     seen: set[str] = set()
     categories: list[str] = []
     for hit in re.finditer(
@@ -400,7 +261,6 @@ def _extract_categories_from_html(html: str) -> list[str]:
         if text and text not in seen:
             seen.add(text)
             categories.append(text)
-
     return categories
 
 
@@ -410,14 +270,8 @@ def _fetch_detail_page(
     timeout: int,
     rate_limit: float,
 ) -> list[str]:
-    """
-    Fetch a tender detail page and return its bid categories.
-    Description is confirmed boilerplate on this platform — we skip it.
-    Returns [] on any error (non-blocking).
-    """
     try:
-        r = session.get(detail_url, timeout=timeout,
-                        headers={"Accept": "text/html,*/*"})
+        r = session.get(detail_url, timeout=timeout, headers={"Accept": "text/html,*/*"})
         if r.status_code != 200:
             logger.debug("Detail page %s returned %s", detail_url, r.status_code)
             return []
@@ -453,32 +307,24 @@ def _parse_item(
         platform_id = str(item.get("Id") or "").strip()
         if not platform_id:
             return None
-
         title = str(item.get("Title") or "").strip()
         if not title:
             return None
 
         ref_no     = _extract_ref_no(title)
         detail_url = f"{base_url}{_DETAIL_PATH}/{platform_id}"
-
-        # Description is confirmed boilerplate on this platform; ignore it.
-        description = ""
+        bid_type   = ref_no.split("-")[0] if ref_no else ""
 
         bid_categories: list[str] = []
         if fetch_details:
             bid_categories = _fetch_detail_page(session, detail_url, timeout, rate_limit)
-
-        # BidClassification (e.g. "Services", "Goods", "Construction") comes from
-        # the detail page HTML, not the listing API. Stored empty for now.
-        # Bid type can be inferred from the title prefix: RFP / T / RFPQ / RFEOI.
-        bid_type = _extract_ref_no(title).split("-")[0] if _extract_ref_no(title) else ""
 
         return Tender(
             id=_tender_id(source_id, platform_id),
             source_id=source_id,
             source_name=source_name,
             title=title,
-            description=description,
+            description="",
             category=bid_type,
             reference_no=ref_no,
             detail_url=detail_url,
@@ -507,7 +353,8 @@ def collect(
 ) -> list[Tender]:
     """
     Collect open tenders from one bids&tenders.ca municipality.
-    Returns [] on unrecoverable error so the pipeline continues with other sources.
+    Uses GET requests only — no CSRF token, no POST, no WAF issues.
+    Returns [] on unrecoverable error so the pipeline continues.
     """
     source_id   = source["id"]
     source_name = source["name"]
@@ -518,14 +365,14 @@ def collect(
     session = _make_session(user_agent)
 
     try:
-        csrf, guid = _load_listing_page(
+        guid = _resolve_guid(
             session, base_url, source_id,
             timeout=timeout_seconds,
             max_retries=max_retries,
             backoff_base=backoff_base_seconds,
         )
     except Exception as exc:
-        logger.error("%s: listing page load failed: %s — skipping", source_name, exc)
+        logger.error("%s: could not resolve module GUID: %s — skipping", source_name, exc)
         return []
 
     try:
@@ -533,7 +380,6 @@ def collect(
             session=session,
             base_url=base_url,
             guid=guid,
-            csrf=csrf,
             timeout=timeout_seconds,
             rate_limit=rate_limit_seconds,
             max_retries=max_retries,
