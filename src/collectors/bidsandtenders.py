@@ -265,6 +265,11 @@ def _load_listing_page(
         logger.info("%s: cached module GUID %s", source_id, guid)
 
     session.headers["Referer"] = listing_url
+    logger.info(
+        "%s: CSRF token=%s...%s  cookies=%s",
+        source_id, csrf[:20], csrf[-8:],
+        {k: v[:12] + "..." for k, v in session.cookies.items()},
+    )
     return csrf, guid
 
 
