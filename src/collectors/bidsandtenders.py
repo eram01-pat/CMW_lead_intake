@@ -191,7 +191,8 @@ def _post_with_retry(
             r = session.post(
                 url, data=data, timeout=timeout,
                 headers={"Accept": "application/json, */*",
-                         "Content-Type": "application/x-www-form-urlencoded"},
+                         "Content-Type": "application/x-www-form-urlencoded",
+                         "X-Requested-With": "XMLHttpRequest"},
             )
             if r.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
                 _backoff(attempt, backoff_base, r.status_code, url)
