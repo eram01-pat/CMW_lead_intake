@@ -83,13 +83,23 @@ Body (form-encoded, NOT JSON):
 - No `category` / `TenderType`
 - No `detailUrl` — constructed from `Id`
 
-### ⚠️ Description is boilerplate
+### ⚠️ Descriptions are boilerplate at BOTH listing and detail level
 
-Every tender's listing-level `Description` is just:
-> "Only Online Submissions will be Accepted for this Tender"
+Confirmed on vaughan.bidsandtenders.ca: the `Description` field in the listing API
+**and** the "Description" section on the detail page both contain only:
+> "Only Online Submissions will be Accepted for this Proposal/Tender"
 
-The actual scope of work lives **only on the detail page**. The collector fetches
-each detail page to get real matchable text.
+The actual scope of work is inside the PDF bid documents (e.g. `RFP26-144.pdf`),
+which are behind a document fee / login wall. We do not download these.
+
+**Consequence: matching is title-only for this platform.**
+
+This is workable because CMW-relevant tenders will have descriptive titles
+("Fleet Washing Services", "Pressure Washing of Transit Facility Exterior", etc.).
+The matching engine is aware of this and operates correctly on titles alone.
+
+`fetch_detail_pages` is disabled by default in `config/settings.yaml` to avoid
+unnecessary rate-limited requests that return no useful text.
 
 ---
 
@@ -144,5 +154,9 @@ per-municipality variable is the MODULE_GUID.
       but structure is identical
 - [ ] **Pagination** — find a municipality with >100 open tenders, confirm `start=100`
       works correctly
-- [ ] **Detail page HTML structure** — confirm which CSS selector contains the
-      scope/description text (update `_fetch_detail_description` if needed)
+- [x] **Detail page content** — description is boilerplate even on detail page;
+      real scope is in PDFs. `fetch_detail_pages` disabled by default.
+- [ ] **Bid Classification field** — "Services" / "Goods" / "Construction" appears on
+      the detail page HTML. If we later want to use it for pre-filtering, probe whether
+      it is also available via a detail JSON endpoint (try Accept: application/json on
+      the detail URL).

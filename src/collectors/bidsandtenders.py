@@ -408,13 +408,18 @@ def _parse_item(
         if _is_boilerplate(description) and fetch_details:
             description = _fetch_detail_description(session, detail_url, timeout, rate_limit)
 
+        # BidClassification (e.g. "Services", "Goods", "Construction") comes from
+        # the detail page HTML, not the listing API. Stored empty for now.
+        # Bid type can be inferred from the title prefix: RFP / T / RFPQ / RFEOI.
+        bid_type = _extract_ref_no(title).split("-")[0] if _extract_ref_no(title) else ""
+
         return Tender(
             id=_tender_id(source_id, platform_id),
             source_id=source_id,
             source_name=source_name,
             title=title,
             description=description,
-            category="",   # not present at listing level on this platform
+            category=bid_type,   # RFP, T, RFPQ, RFEOI — best available at listing level
             reference_no=ref_no,
             detail_url=detail_url,
             status=str(item.get("Status") or "Open").strip(),

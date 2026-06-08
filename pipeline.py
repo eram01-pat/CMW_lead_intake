@@ -80,6 +80,7 @@ def run(args: argparse.Namespace) -> None:
                 backoff_base_seconds=crawl["backoff_base_seconds"],
                 timeout_seconds=crawl["timeout_seconds"],
                 max_per_source=crawl["max_per_source"],
+                fetch_detail_pages=crawl.get("fetch_detail_pages", False),
             )
         except Exception as exc:
             logger.error("Unhandled error collecting %s: %s", source["id"], exc)
