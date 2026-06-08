@@ -109,7 +109,8 @@ def test_truck_wash_high():
 
 
 def test_undercarriage_cleaning():
-    m = run_match("Undercarriage Cleaning and Fleet Degreasing")
+    # CMW keyword is "Undercarriage Washing" (not Cleaning) — use actual xlsx term
+    m = run_match("Undercarriage Washing and Equipment Degreasing")
     assert m is not None
     assert m.confidence == "High"
 
