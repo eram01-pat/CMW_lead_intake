@@ -1,0 +1,11 @@
+# Per-municipality Module GUIDs for the bids&tenders.ca search endpoint.
+# Endpoint pattern: POST {base_url}/Module/Tenders/en/Tender/Search/{guid}
+#
+# Pre-seeded entries are manually verified via browser DevTools.
+# Remaining municipalities are auto-discovered on first run and appended here.
+#
+# To re-discover a GUID (e.g. after a platform migration), delete its entry
+# and the collector will discover it fresh from the listing page.
+
+vaughan:      83b40e99-2f9a-4b20-9444-9cc522b4c6f5  # verified 2026-06-08
+brampton:     1a0b8c31-b337-4cba-b5c4-db8e6c14d026  # verified 2026-06-08

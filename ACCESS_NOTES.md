@@ -150,8 +150,9 @@ per-municipality variable is the MODULE_GUID.
 - [x] **Date format** — `/Date(ms)/` Unix milliseconds
 - [x] **Detail URL** — `GET /Module/Tenders/en/Tender/Detail/{Id}` (singular)
 - [ ] **robots.txt** — load in browser, record contents
-- [ ] **Second municipality** — spot-check Brampton to confirm MODULE_GUID differs
-      but structure is identical
+- [x] **Second municipality** — Brampton confirmed 2026-06-08:
+      GUID `1a0b8c31-b337-4cba-b5c4-db8e6c14d026`, identical URL structure and params.
+      "One collector, 17 sources" design validated.
 - [ ] **Pagination** — find a municipality with >100 open tenders, confirm `start=100`
       works correctly
 - [x] **Detail page content** — description is boilerplate even on detail page;
