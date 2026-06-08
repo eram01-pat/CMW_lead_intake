@@ -9,7 +9,7 @@ crawl:
   timeout_seconds: 30
   # Max tenders to fetch per source per run (0 = no limit). Useful for dev/test.
   max_per_source: 0
-  user_agent: "CMWTenderMonitor/1.0 (Canadian Mobile Wash procurement monitor; contact eramasra@patlon.com)"
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
   # Fetch individual detail pages to extract bid category tags (<div id="divCat">).
   # Categories are used for pre-filtering (suppress Medical/IT/etc.) and confidence
   # boosting (Fleet/Maintenance/Public Works/etc.). Descriptions remain boilerplate.
