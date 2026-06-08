@@ -2,26 +2,30 @@ name: CMW Tender Monitor
 
 on:
   schedule:
-    # Run at 07:00 and 13:00 Eastern on weekdays (12:00 and 18:00 UTC).
-    # Municipal portals don't update by the minute — twice-daily is sufficient.
+    # 07:00 and 13:00 Eastern on weekdays (12:00 and 18:00 UTC)
     - cron: "0 12 * * 1-5"
     - cron: "0 18 * * 1-5"
-  workflow_dispatch:  # allow manual runs from the Actions UI
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — collect and match but skip DB write and dashboard deploy"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write      # needed to commit tenders.db back to the repo
-  pages: write         # needed to deploy to GitHub Pages
-  id-token: write      # needed for OIDC-based Pages deployment
+  contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: "tender-monitor"
-  cancel-in-progress: false  # don't cancel; let the current run finish
+  cancel-in-progress: false
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
     environment:
-      name: github-pages
+      name: ${{ (github.event.inputs.dry_run == 'true') && 'dry-run' || 'github-pages' }}
       url: ${{ steps.pages.outputs.page_url }}
 
     steps:
@@ -37,32 +41,35 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          playwright install chromium --with-deps
+        run: pip install -r requirements.txt
 
       - name: Run pipeline
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python pipeline.py --ignore-errors
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "=== DRY RUN MODE — no DB writes, no dashboard deploy ==="
+            python pipeline.py --dry-run --ignore-errors
+          else
+            python pipeline.py --ignore-errors
+          fi
 
-      # ── State persistence: commit tenders.db back to the repo ─────────────
-      # v1 choice: commit the DB each run for simplicity.
-      # Tradeoff: ~17 extra commits/week, but full history and zero extra infra.
-      # Phase-2 alternative: store/restore as a workflow artifact or GitHub cache.
       - name: Commit updated database
+        if: github.event.inputs.dry_run != 'true'
         run: |
           git config user.name  "CMW Tender Bot"
           git config user.email "actions@github.com"
-          git add data/tenders.db
+          git add data/tenders.db data/module_endpoints.yaml
           git diff --cached --quiet || git commit -m "chore: update tenders.db [skip ci]"
           git push
 
       - name: Upload Pages artifact
+        if: github.event.inputs.dry_run != 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/
 
       - name: Deploy to GitHub Pages
+        if: github.event.inputs.dry_run != 'true'
         id: pages
         uses: actions/deploy-pages@v4
