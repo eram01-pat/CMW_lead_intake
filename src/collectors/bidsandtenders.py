@@ -184,6 +184,7 @@ def _post_with_retry(
     timeout: int,
     max_retries: int,
     backoff_base: float,
+    origin: str = "",
 ) -> requests.Response:
     last: Optional[Exception] = None
     for attempt in range(max_retries + 1):
@@ -191,9 +192,15 @@ def _post_with_retry(
             r = session.post(
                 url, data=data, timeout=timeout,
                 allow_redirects=False,
-                headers={"Accept": "application/json, */*",
-                         "Content-Type": "application/x-www-form-urlencoded",
-                         "X-Requested-With": "XMLHttpRequest"},
+                headers={
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Origin": origin,
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Site": "same-origin",
+                    "Sec-Fetch-Dest": "empty",
+                },
             )
             logger.info(
                 "POST %s → %s  Location: %s  CT: %s",
@@ -307,7 +314,7 @@ def _search_page(
         "sort":   "DateClosing ASC,Id",
         "__RequestVerificationToken": csrf,
     }
-    r = _post_with_retry(session, url, data, timeout, max_retries, backoff_base)
+    r = _post_with_retry(session, url, data, timeout, max_retries, backoff_base, origin=base_url)
 
     ct = r.headers.get("Content-Type", "")
     if "json" not in ct:
