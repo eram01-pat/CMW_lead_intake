@@ -1,32 +1,41 @@
 """
 Parameterized collector for the bids&tenders.ca (eSolutionsGroup) platform.
 
-All 17 municipalities share this one collector — differences are only in base_url.
+All 17 municipalities share this one collector — only base_url differs.
 
-Discovery notes (see ACCESS_NOTES.md for full findings):
-  The platform is an ASP.NET SPA that loads tender listings via an XHR POST to:
-    POST {base_url}/Module/Tenders/en/Search
-  with a JSON body containing filters and pagination. The response is JSON.
-  If this API call fails (structure change, new protection), the collector
-  falls back to Playwright headless rendering and HTML parsing.
+Confirmed API (verified on vaughan.bidsandtenders.ca, 2026-06-08):
 
-Etiquette:
-  - Reads only public listing and detail pages, logged out.
-  - Respects per-host rate limits from settings.yaml.
-  - Identifies itself via User-Agent.
-  - Backs off exponentially on 429 / 5xx.
-  - Fails a single source gracefully; other sources continue.
+  Step 1 — GET {base_url}/Module/Tenders/en
+           Obtain session cookies + CSRF token (__RequestVerificationToken)
+           from the hidden input in the HTML. Also extract the MODULE_GUID
+           from the form action or a JS variable in the page source.
+
+  Step 2 — POST {base_url}/Module/Tenders/en/Tender/Search/{MODULE_GUID}
+                ?status=Open&limit=100&start=0&dir=ASC&sort=DateClosing%20ASC,Id
+           Content-Type: application/x-www-form-urlencoded
+           Body: status=Open&limit=100&start=0&dir=ASC&from=&to=
+                 &sort=DateClosing+ASC%2CId
+                 &__RequestVerificationToken={TOKEN}
+
+  Response: {"success": true, "data": [...], "total": N}
+  Dates: /Date(ms)/ — Unix milliseconds (ASP.NET JSON date format)
+  Descriptions: boilerplate at listing level; real scope is on the detail page.
+
+See ACCESS_NOTES.md for full discovery findings.
 """
 
 import hashlib
-import json
 import logging
+import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
+import yaml
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -34,398 +43,388 @@ from src.storage.models import Tender
 
 logger = logging.getLogger(__name__)
 
-# ── Known API endpoint (discovered via browser devtools on the platform) ──────
-_SEARCH_PATH = "/Module/Tenders/en/Search"
-_PAGE_SIZE = 100  # fetch up to 100 per page; paginate if needed
+_LISTING_PATH = "/Module/Tenders/en"
+_DETAIL_PATH  = "/Module/Tenders/en/Tender/Detail"    # confirmed: singular "Detail"
+_CACHE_FILE   = "data/module_endpoints.yaml"
+_PAGE_LIMIT   = 100
+
+# Listing-level Description is just this boilerplate
+_BOILERPLATE_RE = re.compile(r"only\s+online\s+submissions", re.IGNORECASE)
+
+# Reference prefix in Title: "T26-180 - Some Title" → "T26-180"
+_REF_PREFIX_RE = re.compile(r"^([A-Z]{1,8}\d{2}-\d{2,5}[A-Z]?)\s*[-–]\s*", re.IGNORECASE)
+
+# GUID pattern
+_GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
-def _make_session(user_agent: str, timeout: int) -> requests.Session:
-    session = requests.Session()
-    retry = Retry(
-        total=0,  # we handle retries ourselves for better logging
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    session.headers.update({
-        "User-Agent": user_agent,
-        "Accept": "application/json, text/html, */*",
-        "Accept-Language": "en-CA,en;q=0.9",
-    })
-    session.request_timeout = timeout  # stored for use in requests
-    return session
+# ── Date parsing ──────────────────────────────────────────────────────────────
 
-
-def _tender_id(source_id: str, reference_no: str, detail_url: str) -> str:
-    """Stable, dedup-safe primary key: hash of source + (ref_no if present else url)."""
-    key = f"{source_id}:{reference_no if reference_no else detail_url}"
-    return hashlib.sha256(key.encode()).hexdigest()[:32]
-
-
-def _parse_date(value: Any) -> Optional[date]:
+def _parse_aspnet_date(value: Any) -> Optional[date]:
     if not value:
         return None
-    if isinstance(value, date):
-        return value
+    s = str(value)
+    m = re.search(r"/Date\((-?\d+)(?:[+-]\d+)?\)/", s)
+    if m:
+        return datetime.fromtimestamp(int(m.group(1)) / 1000, tz=timezone.utc).date()
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
         try:
-            return datetime.strptime(str(value)[:19], fmt).date()
+            return datetime.strptime(s[:19], fmt).date()
         except ValueError:
             continue
-    logger.debug("Could not parse date: %r", value)
     return None
 
 
-def _normalize_status(raw: str) -> str:
-    mapping = {
-        "open": "Open",
-        "active": "Open",
-        "closed": "Closed",
-        "awarded": "Awarded",
-        "cancelled": "Cancelled",
-    }
-    return mapping.get(str(raw).strip().lower(), str(raw).strip())
+# ── HTML helpers ──────────────────────────────────────────────────────────────
+
+class _HTMLStripper(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._parts: list[str] = []
+
+    def handle_data(self, data: str):
+        self._parts.append(data)
+
+    def get_text(self) -> str:
+        return " ".join(p.strip() for p in self._parts if p.strip())
 
 
-# ── API strategy ──────────────────────────────────────────────────────────────
+def _strip_html(html: str) -> str:
+    if not html:
+        return ""
+    p = _HTMLStripper()
+    p.feed(html)
+    return p.get_text()
 
-def _fetch_via_api(
+
+def _is_boilerplate(text: str) -> bool:
+    return not text or bool(_BOILERPLATE_RE.search(text))
+
+
+def _extract_csrf_token(html: str) -> Optional[str]:
+    """Extract __RequestVerificationToken from a hidden input."""
+    m = re.search(
+        r'<input[^>]+name="__RequestVerificationToken"[^>]+value="([^"]+)"',
+        html, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1)
+    # Some ASP.NET versions put it in a meta tag
+    m = re.search(
+        r'<meta[^>]+name="__RequestVerificationToken"[^>]+content="([^"]+)"',
+        html, re.IGNORECASE,
+    )
+    return m.group(1) if m else None
+
+
+def _extract_module_guid(html: str, base_url: str) -> Optional[str]:
+    """
+    Find the MODULE_GUID embedded in the listing page.
+    Looks for /Tender/Search/{GUID} in form action attributes or JS variables.
+    """
+    # Form action containing the search path
+    m = re.search(
+        r'/Module/Tenders/en/Tender/Search/(' + _GUID_RE.pattern + r')',
+        html, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1)
+    # JavaScript variable assignment
+    m = re.search(
+        r'["\'](?:/[^"\']*)?/Tender/Search/(' + _GUID_RE.pattern + r')["\']',
+        html, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1)
+    return None
+
+
+# ── Session / requests helpers ────────────────────────────────────────────────
+
+def _make_session(user_agent: str) -> requests.Session:
+    s = requests.Session()
+    s.mount("https://", HTTPAdapter(max_retries=Retry(total=0, raise_on_status=False)))
+    s.mount("http://",  HTTPAdapter(max_retries=Retry(total=0, raise_on_status=False)))
+    s.headers.update({
+        "User-Agent":      user_agent,
+        "Accept-Language": "en-CA,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+    })
+    return s
+
+
+def _get_with_retry(
     session: requests.Session,
-    base_url: str,
-    source_id: str,
-    source_name: str,
-    rate_limit: float,
+    url: str,
+    timeout: int,
     max_retries: int,
     backoff_base: float,
-    timeout: int,
-    max_per_source: int,
-) -> list[Tender]:
-    """Attempt the JSON XHR endpoint. Raises RuntimeError if the API is unavailable."""
-    endpoint = base_url.rstrip("/") + _SEARCH_PATH
-    tenders: list[Tender] = []
-    page = 1
-
-    while True:
-        payload = {
-            "pageNumber": page,
-            "pageSize": _PAGE_SIZE,
-            "status": "Open",
-            "orderBy": "PostingDate",
-            "orderDirection": "DESC",
-        }
-        resp = _post_with_retry(
-            session, endpoint, json=payload,
-            max_retries=max_retries, backoff_base=backoff_base, timeout=timeout,
-        )
-
-        content_type = resp.headers.get("Content-Type", "")
-        if "application/json" not in content_type and "text/json" not in content_type:
-            raise RuntimeError(
-                f"API returned non-JSON ({content_type}); "
-                "will fall back to Playwright"
-            )
-
-        data = resp.json()
-
-        # The platform wraps results in various shapes; try common ones.
-        items = (
-            data.get("tenders")
-            or data.get("Tenders")
-            or data.get("results")
-            or data.get("Results")
-            or data.get("data")
-            or (data if isinstance(data, list) else [])
-        )
-        if not items:
-            break
-
-        for item in items:
-            t = _parse_api_item(item, source_id, source_name, base_url)
-            if t:
-                tenders.append(t)
-            if max_per_source and len(tenders) >= max_per_source:
-                return tenders
-
-        total = (
-            data.get("totalCount")
-            or data.get("TotalCount")
-            or data.get("total")
-            or 0
-        )
-        if not total or len(tenders) >= int(total) or len(items) < _PAGE_SIZE:
-            break
-
-        page += 1
-        time.sleep(rate_limit)
-
-    return tenders
-
-
-def _parse_api_item(
-    item: dict, source_id: str, source_name: str, base_url: str
-) -> Optional[Tender]:
-    """Map a raw API dict to a Tender. Returns None if the item is unparseable."""
-    try:
-        title = (
-            item.get("title") or item.get("Title")
-            or item.get("tenderTitle") or item.get("TenderTitle") or ""
-        ).strip()
-        if not title:
-            return None
-
-        ref_no = str(
-            item.get("referenceNumber") or item.get("ReferenceNumber")
-            or item.get("tenderNumber") or item.get("TenderNumber")
-            or item.get("id") or item.get("Id") or ""
-        ).strip()
-
-        # Detail URL: may be a relative path or absolute
-        raw_url = (
-            item.get("url") or item.get("Url")
-            or item.get("detailUrl") or item.get("DetailUrl")
-            or item.get("link") or item.get("Link") or ""
-        ).strip()
-        detail_url = (
-            raw_url if raw_url.startswith("http")
-            else urljoin(base_url, raw_url) if raw_url
-            else f"{base_url}/Module/Tenders/en/{ref_no}" if ref_no
-            else base_url
-        )
-
-        description = (
-            item.get("description") or item.get("Description")
-            or item.get("scope") or item.get("Scope")
-            or item.get("summary") or item.get("Summary") or ""
-        ).strip()
-
-        category = (
-            item.get("category") or item.get("Category")
-            or item.get("tenderType") or item.get("TenderType") or ""
-        )
-        if isinstance(category, dict):
-            category = category.get("name") or category.get("Name") or ""
-
-        posted = _parse_date(
-            item.get("postedDate") or item.get("PostedDate")
-            or item.get("openDate") or item.get("OpenDate")
-            or item.get("issueDate") or item.get("IssueDate")
-        )
-        closing = _parse_date(
-            item.get("closingDate") or item.get("ClosingDate")
-            or item.get("dueDate") or item.get("DueDate")
-            or item.get("closingDateTime") or item.get("ClosingDateTime")
-        )
-
-        raw_status = (
-            item.get("status") or item.get("Status")
-            or item.get("tenderStatus") or item.get("TenderStatus") or "Open"
-        )
-        status = _normalize_status(str(raw_status))
-
-        tid = _tender_id(source_id, ref_no, detail_url)
-
-        return Tender(
-            id=tid,
-            source_id=source_id,
-            source_name=source_name,
-            title=title,
-            description=description,
-            category=str(category),
-            reference_no=ref_no,
-            detail_url=detail_url,
-            status=status,
-            posted_date=posted,
-            closing_date=closing,
-            raw=item,
-        )
-    except Exception as exc:
-        logger.warning("Failed to parse API item: %s — %r", exc, item)
-        return None
-
-
-# ── Playwright fallback ───────────────────────────────────────────────────────
-
-def _fetch_via_playwright(
-    base_url: str,
-    source_id: str,
-    source_name: str,
-    user_agent: str,
-    max_per_source: int,
-) -> list[Tender]:
-    """
-    Headless Playwright fallback for when the JSON API is unavailable.
-    Navigates to the tenders listing page, waits for the tender rows to render,
-    then reads each row and its detail page.
-    """
-    try:
-        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-    except ImportError:
-        raise RuntimeError(
-            "Playwright is not installed. Run: pip install playwright && "
-            "playwright install chromium"
-        )
-
-    listing_url = f"{base_url.rstrip('/')}/Module/Tenders/en"
-    tenders: list[Tender] = []
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        context = browser.new_context(user_agent=user_agent)
-        page = context.new_page()
-
-        logger.info("Playwright: loading %s", listing_url)
-        page.goto(listing_url, wait_until="networkidle", timeout=30_000)
-
-        # Capture XHR responses that look like tender listings
-        api_data: list[dict] = []
-
-        def handle_response(response):
-            if "Tenders" in response.url and response.status == 200:
-                content_type = response.headers.get("content-type", "")
-                if "json" in content_type:
-                    try:
-                        body = response.json()
-                        api_data.append(body)
-                    except Exception:
-                        pass
-
-        page.on("response", handle_response)
-
-        # Trigger a fresh load so we capture the XHR
-        page.reload(wait_until="networkidle", timeout=30_000)
-
-        if api_data:
-            # We intercepted the JSON — process it the same as API strategy
-            for payload in api_data:
-                items = (
-                    payload.get("tenders") or payload.get("Tenders")
-                    or payload.get("results") or payload.get("data")
-                    or (payload if isinstance(payload, list) else [])
-                )
-                for item in items:
-                    t = _parse_api_item(item, source_id, source_name, base_url)
-                    if t:
-                        tenders.append(t)
-                    if max_per_source and len(tenders) >= max_per_source:
-                        break
-        else:
-            # Parse rendered HTML as fallback
-            tenders = _parse_rendered_html(
-                page, source_id, source_name, base_url, max_per_source
-            )
-
-        browser.close()
-
-    return tenders
-
-
-def _parse_rendered_html(
-    page, source_id: str, source_name: str, base_url: str, max_per_source: int
-) -> list[Tender]:
-    """
-    Parse tender rows from the rendered DOM when XHR interception yielded nothing.
-    Selectors are based on the eSolutionsGroup bids&tenders.ca DOM structure.
-    Update ACCESS_NOTES.md if selectors need adjustment per-site.
-    """
-    tenders: list[Tender] = []
-
-    # Common row selectors on the bids&tenders.ca platform
-    row_selectors = [
-        "table.tenders-list tbody tr",
-        ".tender-list-item",
-        ".tender-row",
-        "[data-tender-id]",
-        ".bids-table tbody tr",
-    ]
-
-    rows = []
-    for sel in row_selectors:
-        rows = page.query_selector_all(sel)
-        if rows:
-            logger.debug("Playwright HTML: matched rows with selector %r", sel)
-            break
-
-    if not rows:
-        logger.warning(
-            "Playwright HTML: no rows found for %s — "
-            "selectors may need updating (see ACCESS_NOTES.md)",
-            base_url,
-        )
-        return tenders
-
-    for row in rows:
+) -> requests.Response:
+    last: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
         try:
-            title_el = row.query_selector("a.tender-title, .tender-name a, td:nth-child(2) a")
-            if not title_el:
+            r = session.get(url, timeout=timeout,
+                            headers={"Accept": "text/html,application/xhtml+xml,*/*"})
+            if r.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                _backoff(attempt, backoff_base, r.status_code, url)
                 continue
-            title = title_el.inner_text().strip()
-            href = title_el.get_attribute("href") or ""
-            detail_url = href if href.startswith("http") else urljoin(base_url, href)
+            r.raise_for_status()
+            return r
+        except requests.RequestException as exc:
+            last = exc
+            if attempt < max_retries:
+                _backoff(attempt, backoff_base, None, url)
+    raise RuntimeError(f"GET {url} failed after {max_retries + 1} attempts: {last}")
 
-            ref_el = row.query_selector(".reference-no, .tender-ref, td:nth-child(1)")
-            ref_no = ref_el.inner_text().strip() if ref_el else ""
-
-            close_el = row.query_selector(".closing-date, .tender-closing, td:nth-child(5)")
-            closing = _parse_date(close_el.inner_text().strip() if close_el else None)
-
-            status_el = row.query_selector(".status, .tender-status, td:nth-child(6)")
-            status = _normalize_status(status_el.inner_text().strip() if status_el else "Open")
-
-            tid = _tender_id(source_id, ref_no, detail_url)
-            tenders.append(Tender(
-                id=tid,
-                source_id=source_id,
-                source_name=source_name,
-                title=title,
-                description="",  # fetched on detail page pass if needed
-                category="",
-                reference_no=ref_no,
-                detail_url=detail_url,
-                status=status,
-                posted_date=None,
-                closing_date=closing,
-                raw={"title": title, "href": href},
-            ))
-            if max_per_source and len(tenders) >= max_per_source:
-                break
-        except Exception as exc:
-            logger.debug("Playwright HTML: row parse error: %s", exc)
-
-    return tenders
-
-
-# ── Retry wrapper ─────────────────────────────────────────────────────────────
 
 def _post_with_retry(
     session: requests.Session,
     url: str,
-    json: dict,
+    data: dict,
+    timeout: int,
     max_retries: int,
     backoff_base: float,
-    timeout: int,
 ) -> requests.Response:
-    last_exc: Optional[Exception] = None
+    last: Optional[Exception] = None
     for attempt in range(max_retries + 1):
         try:
-            resp = session.post(url, json=json, timeout=timeout)
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
-                wait = backoff_base * (2 ** attempt)
-                logger.warning(
-                    "HTTP %s from %s; backing off %.1fs (attempt %d/%d)",
-                    resp.status_code, url, wait, attempt + 1, max_retries + 1,
-                )
-                time.sleep(wait)
+            r = session.post(
+                url, data=data, timeout=timeout,
+                headers={"Accept": "application/json, */*",
+                         "Content-Type": "application/x-www-form-urlencoded"},
+            )
+            if r.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                _backoff(attempt, backoff_base, r.status_code, url)
                 continue
-            resp.raise_for_status()
-            return resp
+            r.raise_for_status()
+            return r
         except requests.RequestException as exc:
-            last_exc = exc
+            last = exc
             if attempt < max_retries:
-                wait = backoff_base * (2 ** attempt)
-                logger.warning("Request error %s; retrying in %.1fs", exc, wait)
-                time.sleep(wait)
-    raise RuntimeError(f"Failed after {max_retries + 1} attempts: {last_exc}")
+                _backoff(attempt, backoff_base, None, url)
+    raise RuntimeError(f"POST {url} failed after {max_retries + 1} attempts: {last}")
+
+
+def _backoff(attempt: int, base: float, status: Optional[int], url: str) -> None:
+    wait = base * (2 ** attempt)
+    logger.warning("HTTP %s from %s — backing off %.1fs", status or "err", url, wait)
+    time.sleep(wait)
+
+
+# ── Module GUID + CSRF discovery ──────────────────────────────────────────────
+
+def _load_cache() -> dict:
+    p = Path(_CACHE_FILE)
+    return yaml.safe_load(p.read_text()) if p.exists() else {}
+
+
+def _save_cache(cache: dict) -> None:
+    Path(_CACHE_FILE).parent.mkdir(parents=True, exist_ok=True)
+    Path(_CACHE_FILE).write_text(yaml.dump(cache, default_flow_style=False))
+
+
+def _load_listing_page(
+    session: requests.Session,
+    base_url: str,
+    source_id: str,
+    timeout: int,
+    max_retries: int,
+    backoff_base: float,
+) -> tuple[str, str]:
+    """
+    GET the tenders listing page. Returns (csrf_token, module_guid).
+    Caches the module_guid in data/module_endpoints.yaml.
+    Raises RuntimeError if either cannot be extracted.
+    """
+    listing_url = f"{base_url}{_LISTING_PATH}"
+    session.headers["Referer"] = base_url
+
+    r = _get_with_retry(session, listing_url, timeout, max_retries, backoff_base)
+    html = r.text
+
+    csrf = _extract_csrf_token(html)
+    if not csrf:
+        raise RuntimeError(
+            f"Could not find __RequestVerificationToken in {listing_url}. "
+            "The page structure may have changed."
+        )
+
+    # Check cache first; extract from HTML otherwise
+    cache = _load_cache()
+    guid = cache.get(source_id) or _extract_module_guid(html, base_url)
+    if not guid:
+        raise RuntimeError(
+            f"Could not find MODULE_GUID in {listing_url}. "
+            "Check ACCESS_NOTES.md and update _extract_module_guid() if needed."
+        )
+
+    if source_id not in cache:
+        cache[source_id] = guid
+        _save_cache(cache)
+        logger.info("%s: cached module GUID %s", source_id, guid)
+
+    session.headers["Referer"] = listing_url
+    return csrf, guid
+
+
+# ── Core search + pagination ──────────────────────────────────────────────────
+
+def _search_page(
+    session: requests.Session,
+    base_url: str,
+    guid: str,
+    csrf: str,
+    start: int,
+    timeout: int,
+    max_retries: int,
+    backoff_base: float,
+) -> tuple[list[dict], int]:
+    url = (
+        f"{base_url}{_LISTING_PATH}/Tender/Search/{guid}"
+        f"?status=Open&limit={_PAGE_LIMIT}&start={start}"
+        f"&dir=ASC&from=&to=&sort=DateClosing+ASC%2CId"
+    )
+    data = {
+        "status": "Open",
+        "limit":  str(_PAGE_LIMIT),
+        "start":  str(start),
+        "dir":    "ASC",
+        "from":   "",
+        "to":     "",
+        "sort":   "DateClosing ASC,Id",
+        "__RequestVerificationToken": csrf,
+    }
+    r = _post_with_retry(session, url, data, timeout, max_retries, backoff_base)
+
+    ct = r.headers.get("Content-Type", "")
+    if "json" not in ct:
+        raise RuntimeError(f"Expected JSON, got {ct!r} from {url}")
+
+    body = r.json()
+    return body.get("data") or [], int(body.get("total") or 0)
+
+
+def _fetch_all_pages(
+    session: requests.Session,
+    base_url: str,
+    guid: str,
+    csrf: str,
+    timeout: int,
+    rate_limit: float,
+    max_retries: int,
+    backoff_base: float,
+    max_per_source: int,
+) -> list[dict]:
+    all_items: list[dict] = []
+    start = 0
+
+    while True:
+        items, total = _search_page(
+            session, base_url, guid, csrf,
+            start=start, timeout=timeout,
+            max_retries=max_retries, backoff_base=backoff_base,
+        )
+        all_items.extend(items)
+
+        if max_per_source and len(all_items) >= max_per_source:
+            return all_items[:max_per_source]
+        if not items or len(all_items) >= total or len(items) < _PAGE_LIMIT:
+            break
+
+        start += len(items)
+        time.sleep(rate_limit)
+
+    return all_items
+
+
+# ── Detail page ───────────────────────────────────────────────────────────────
+
+def _fetch_detail_description(
+    session: requests.Session,
+    detail_url: str,
+    timeout: int,
+    rate_limit: float,
+) -> str:
+    """Fetch the tender detail page; return plain-text description (best-effort)."""
+    try:
+        r = session.get(detail_url, timeout=timeout,
+                        headers={"Accept": "text/html,*/*"})
+        if r.status_code != 200:
+            return ""
+        time.sleep(rate_limit)
+        html = r.text
+        # Try common eSolutionsGroup description container patterns
+        for pat in [
+            r'id="[^"]*[Dd]escription[^"]*"[^>]*>(.*?)</(?:div|section|article)',
+            r'class="[^"]*[Dd]escription[^"]*"[^>]*>(.*?)</(?:div|section)',
+            r'class="[^"]*[Ss]cope[^"]*"[^>]*>(.*?)</(?:div|section)',
+            r'class="[^"]*tender-detail[^"]*"[^>]*>(.*?)</(?:div|section)',
+        ]:
+            m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
+            if m:
+                text = _strip_html(m.group(1))
+                if text and not _is_boilerplate(text) and len(text) > 50:
+                    return text
+        return ""
+    except Exception as exc:
+        logger.debug("Detail fetch error %s: %s", detail_url, exc)
+        return ""
+
+
+# ── Item parsing ──────────────────────────────────────────────────────────────
+
+def _tender_id(source_id: str, platform_id: str) -> str:
+    return hashlib.sha256(f"{source_id}:{platform_id}".encode()).hexdigest()[:32]
+
+
+def _extract_ref_no(title: str) -> str:
+    m = _REF_PREFIX_RE.match(title)
+    return m.group(1).upper() if m else ""
+
+
+def _parse_item(
+    item: dict,
+    source_id: str,
+    source_name: str,
+    base_url: str,
+    session: requests.Session,
+    timeout: int,
+    rate_limit: float,
+    fetch_details: bool,
+) -> Optional[Tender]:
+    try:
+        platform_id = str(item.get("Id") or "").strip()
+        if not platform_id:
+            return None
+
+        title = str(item.get("Title") or "").strip()
+        if not title:
+            return None
+
+        ref_no     = _extract_ref_no(title)
+        detail_url = f"{base_url}{_DETAIL_PATH}/{platform_id}"
+
+        description = _strip_html(str(item.get("Description") or ""))
+        if _is_boilerplate(description) and fetch_details:
+            description = _fetch_detail_description(session, detail_url, timeout, rate_limit)
+
+        return Tender(
+            id=_tender_id(source_id, platform_id),
+            source_id=source_id,
+            source_name=source_name,
+            title=title,
+            description=description,
+            category="",   # not present at listing level on this platform
+            reference_no=ref_no,
+            detail_url=detail_url,
+            status=str(item.get("Status") or "Open").strip(),
+            posted_date=_parse_aspnet_date(item.get("DateAvailable")),
+            closing_date=_parse_aspnet_date(item.get("DateClosing")),
+            raw=item,
+        )
+    except Exception as exc:
+        logger.warning("Failed to parse item %r: %s", item.get("Id"), exc)
+        return None
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -438,54 +437,61 @@ def collect(
     backoff_base_seconds: float = 5.0,
     timeout_seconds: int = 30,
     max_per_source: int = 0,
+    fetch_detail_pages: bool = True,
 ) -> list[Tender]:
     """
-    Collect open tenders from a single bids&tenders.ca source.
-
-    Returns a list of Tender objects. On error, logs and returns an empty list
-    so the pipeline continues with remaining sources.
+    Collect open tenders from one bids&tenders.ca municipality.
+    Returns [] on unrecoverable error so the pipeline continues with other sources.
     """
-    source_id = source["id"]
+    source_id   = source["id"]
     source_name = source["name"]
-    base_url = source["base_url"].rstrip("/")
+    base_url    = source["base_url"].rstrip("/")
 
-    session = _make_session(user_agent, timeout_seconds)
+    logger.info("Collecting %s", source_name)
 
-    logger.info("Collecting %s (%s)", source_name, base_url)
+    session = _make_session(user_agent)
 
     try:
-        tenders = _fetch_via_api(
-            session, base_url, source_id, source_name,
+        csrf, guid = _load_listing_page(
+            session, base_url, source_id,
+            timeout=timeout_seconds,
+            max_retries=max_retries,
+            backoff_base=backoff_base_seconds,
+        )
+    except Exception as exc:
+        logger.error("%s: listing page load failed: %s — skipping", source_name, exc)
+        return []
+
+    try:
+        raw_items = _fetch_all_pages(
+            session=session,
+            base_url=base_url,
+            guid=guid,
+            csrf=csrf,
+            timeout=timeout_seconds,
             rate_limit=rate_limit_seconds,
             max_retries=max_retries,
             backoff_base=backoff_base_seconds,
-            timeout=timeout_seconds,
             max_per_source=max_per_source,
         )
-        logger.info("%s: API strategy yielded %d tenders", source_name, len(tenders))
-        return tenders
-
-    except Exception as api_exc:
-        logger.warning(
-            "%s: API strategy failed (%s); falling back to Playwright",
-            source_name, api_exc,
-        )
-
-    try:
-        tenders = _fetch_via_playwright(
-            base_url, source_id, source_name,
-            user_agent=user_agent,
-            max_per_source=max_per_source,
-        )
-        logger.info(
-            "%s: Playwright strategy yielded %d tenders", source_name, len(tenders)
-        )
-        return tenders
-
-    except Exception as pw_exc:
-        logger.error(
-            "%s: Both strategies failed. Playwright error: %s. "
-            "Source skipped for this run.",
-            source_name, pw_exc,
-        )
+    except Exception as exc:
+        logger.error("%s: search failed: %s — skipping", source_name, exc)
         return []
+
+    tenders: list[Tender] = []
+    for item in raw_items:
+        t = _parse_item(
+            item=item,
+            source_id=source_id,
+            source_name=source_name,
+            base_url=base_url,
+            session=session,
+            timeout=timeout_seconds,
+            rate_limit=rate_limit_seconds,
+            fetch_details=fetch_detail_pages,
+        )
+        if t:
+            tenders.append(t)
+
+    logger.info("%s: %d tenders collected", source_name, len(tenders))
+    return tenders

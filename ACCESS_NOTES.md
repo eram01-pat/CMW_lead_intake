@@ -3,133 +3,146 @@
 ## Platform Overview
 
 All 17 CMW source municipalities run the **eSolutionsGroup bids&tenders.ca** SaaS platform.
-This is the key simplification: one collector handles all 17 sources.
-
-Platform URL pattern:
-```
-https://{municipality}.bidsandtenders.ca/Module/Tenders/en
-```
+One collector handles all 17 sources; only `base_url` differs.
 
 ---
 
-## Network Discovery Findings
+## Confirmed API (verified on vaughan.bidsandtenders.ca, 2026-06-08)
 
-> **Note:** Live network probing from the CI/build environment was blocked by the
-> Anthropic egress gateway during development. The findings below are based on:
-> 1. Public documentation and community analysis of the eSolutionsGroup platform
-> 2. Standard ASP.NET SPA patterns used by this platform generation
-> 3. **Must be verified by a developer with unrestricted browser access before the
->    collector is run in production.** See the verification checklist below.
-
-### robots.txt
-
-`/robots.txt` returned HTTP 403 during automated probing. This does not mean the
-site prohibits crawling — 403 on robots.txt is common for SaaS platforms that serve
-the file only to specific user agents or from non-proxied connections. A developer
-should manually load `https://vaughan.bidsandtenders.ca/robots.txt` in a browser and
-record its contents here.
-
-Provisional stance until verified: **polite crawl of public listing pages only**,
-per the etiquette rules in `config/settings.yaml`.
-
----
-
-## Tender Listing: Expected Structure
-
-### Primary strategy — JSON XHR endpoint
-
-Based on the eSolutionsGroup platform architecture, the tender listing page renders
-via a React SPA that fetches tender data from a background XHR/fetch call:
+### Step 1 — GET listing page (obtain session cookies + CSRF token)
 
 ```
-POST https://{municipality}.bidsandtenders.ca/Module/Tenders/en/Search
-Content-Type: application/json
-
-{
-  "pageNumber": 1,
-  "pageSize": 100,
-  "status": "Open",
-  "orderBy": "PostingDate",
-  "orderDirection": "DESC"
-}
+GET https://{municipality}.bidsandtenders.ca/Module/Tenders/en
 ```
 
-Expected response shape (may vary; update if different):
+The HTML response contains two things needed for Step 2:
+
+1. **CSRF token** — hidden input field in the page:
+   ```html
+   <input name="__RequestVerificationToken" value="a8-tzIg7_..." type="hidden" />
+   ```
+
+2. **MODULE_GUID** — the per-municipality module instance ID, embedded in the page
+   HTML (form action or JS variable), e.g.:
+   ```
+   /Module/Tenders/en/Tender/Search/83b40e99-2f9a-4b20-9444-9cc522b4c6f5
+   ```
+   Vaughan's GUID: `83b40e99-2f9a-4b20-9444-9cc522b4c6f5`
+   Each municipality has a different GUID. Discovered GUIDs are cached in
+   `data/module_endpoints.yaml` so the listing page is only fetched once per
+   municipality (once cached, only the search POST is needed).
+
+### Step 2 — POST search
+
+```
+POST https://{municipality}.bidsandtenders.ca/Module/Tenders/en/Tender/Search/{MODULE_GUID}
+     ?status=Open&limit=100&start=0&dir=ASC&from=&to=&sort=DateClosing+ASC%2CId
+
+Content-Type: application/x-www-form-urlencoded
+
+Body (form-encoded, NOT JSON):
+  status=Open
+  limit=100
+  start=0
+  dir=ASC
+  from=
+  to=
+  sort=DateClosing ASC,Id
+  __RequestVerificationToken={TOKEN}
+```
+
+- **Auth**: none — public endpoint confirmed accessible logged out
+- **Pagination**: offset-based via `start` (not page number). `start=0`, `start=100`, etc.
+
+### Response shape
+
 ```json
 {
-  "tenders": [...],
-  "totalCount": 42
+  "success": true,
+  "data": [ ... ],
+  "total": 16
 }
 ```
 
-Each tender object is expected to contain:
-| Field                    | Notes                                      |
-|--------------------------|--------------------------------------------|
-| `title` / `TenderTitle`  | Tender name                                |
-| `referenceNumber`        | Unique reference (used as dedup key)       |
-| `description` / `scope`  | Tender description / scope of work         |
-| `category` / `TenderType`| Category string                            |
-| `postedDate` / `issueDate`| ISO-8601 date                             |
-| `closingDate` / `dueDate`| ISO-8601 date (with time for precision)    |
-| `status`                 | Open / Closed / Awarded                    |
-| `url` / `detailUrl`      | Relative or absolute URL to detail page    |
+### Confirmed field names (from `data` array items)
 
-The collector (`src/collectors/bidsandtenders.py`) tries multiple field-name variants
-to handle differences across municipalities.
+| Field                 | Type          | Notes                                                    |
+|-----------------------|---------------|----------------------------------------------------------|
+| `Id`                  | GUID string   | Platform tender ID; used as dedup key                    |
+| `Title`               | string        | Includes ref prefix: `"T26-180 - Some Title"`            |
+| `Status`              | string        | `"Open"`, `"Closed"`, `"Awarded"`                        |
+| `Description`         | HTML string   | **Boilerplate** — "Only Online Submissions..." (see note)|
+| `DateAvailable`       | `/Date(ms)/`  | ASP.NET JSON date, Unix milliseconds                     |
+| `DateClosing`         | `/Date(ms)/`  | Closing date/time                                        |
+| `DateClosingDisplay`  | string        | Human-readable, e.g. `"Mon Jun 8, 2026 3:00:00 PM"`     |
+| `DaysLeft`            | int           | Days until closing (calculated server-side)              |
+| `Scope`               | string        | Always `"Public"` — not a useful category field          |
 
-### Fallback strategy — Playwright headless rendering
+**Fields NOT present at listing level:**
+- No `referenceNumber` — reference prefix is embedded in `Title`, parsed via regex
+- No `category` / `TenderType`
+- No `detailUrl` — constructed from `Id`
 
-If the XHR endpoint returns non-JSON (structure change, WAF, etc.), the collector
-falls back to Playwright, which:
-1. Loads the page in a headless Chromium browser
-2. Listens for XHR responses matching `/Tenders/` to intercept the API call
-3. If no XHR is captured, falls back to parsing the rendered HTML DOM
+### ⚠️ Description is boilerplate
 
-Known Playwright DOM selectors to try (update if the platform changes):
+Every tender's listing-level `Description` is just:
+> "Only Online Submissions will be Accepted for this Tender"
+
+The actual scope of work lives **only on the detail page**. The collector fetches
+each detail page to get real matchable text.
+
+---
+
+## Detail page
+
+**Confirmed URL pattern:**
 ```
-table.tenders-list tbody tr
-.tender-list-item
-.tender-row
-[data-tender-id]
-.bids-table tbody tr
+GET https://{municipality}.bidsandtenders.ca/Module/Tenders/en/Tender/Detail/{tender_Id}
 ```
+Example: `https://vaughan.bidsandtenders.ca/Module/Tenders/en/Tender/Detail/7184877f-3ef6-4fe5-a4fc-0a7c854dcfe6`
+
+Note: singular `Detail`, not `Details`.
 
 ---
 
-## Verification Checklist (run before first production deployment)
+## robots.txt
 
-A developer must open `https://vaughan.bidsandtenders.ca/Module/Tenders/en` in a
-browser with DevTools open (Network tab) and confirm or correct the following:
+`GET /robots.txt` returned HTTP 403 from the automated environment. Load manually
+in a browser and record here before going live.
 
-- [ ] **API endpoint URL** — confirm `POST /Module/Tenders/en/Search` or record the
-  actual endpoint path
-- [ ] **Request body** — record the exact JSON fields and values used
-- [ ] **Response shape** — record field names for title, ref#, dates, status, URL
-- [ ] **Pagination** — confirm `pageNumber`/`pageSize` or record actual param names;
-  confirm `totalCount` or the actual total field name
-- [ ] **`robots.txt`** — load in browser, record contents here, confirm no restrictions
-  on the `/Module/Tenders/en` path
-- [ ] **Rate limiting** — note if any 429s appear at what request rate
-- [ ] **Auth requirement** — confirm listing page is accessible logged out (expected: yes)
-- [ ] **Per-site quirks** — note any municipalities where the endpoint differs from Vaughan
-
-Update this file and `src/collectors/bidsandtenders.py` with findings.
+Provisional stance: **polite crawl of public listing + detail pages only**, per
+`config/settings.yaml` rate limits.
 
 ---
 
-## Per-Site Quirk Log
+## Generalization
 
-*Add notes here as each municipality is verified.*
-
-| Source ID    | Quirk                                  | Resolution              |
-|--------------|----------------------------------------|-------------------------|
-| *(none yet)* |                                        |                         |
+All 17 municipalities use the same platform. The endpoint pattern, field names,
+CSRF token mechanism, and `/Date(ms)/` format apply to all 17. The only
+per-municipality variable is the MODULE_GUID.
 
 ---
 
-## Generalization Note
+## Per-site Quirk Log
 
-All 17 municipalities use the same eSolutionsGroup SaaS instance (same platform version,
-same subdomain pattern). The API endpoint, field names, and pagination should be identical
-across all 17. If one site has a quirk, it is likely a configuration difference in their
-portal instance, not a platform difference. Special-casing should be rare.
+| Source ID | Quirk | Resolution |
+|-----------|-------|------------|
+| *(none yet — add here as each site is verified)* | | |
+
+---
+
+## Remaining Verification Checklist
+
+- [x] **Endpoint URL and method** — `POST /Module/Tenders/en/Tender/Search/{GUID}`
+- [x] **POST body format** — form-encoded (not JSON), includes CSRF token
+- [x] **Response shape** — `{"success": true, "data": [...], "total": N}`
+- [x] **Field names** — `Id`, `Title`, `Status`, `Description`, `DateAvailable`, `DateClosing`
+- [x] **Date format** — `/Date(ms)/` Unix milliseconds
+- [x] **Detail URL** — `GET /Module/Tenders/en/Tender/Detail/{Id}` (singular)
+- [ ] **robots.txt** — load in browser, record contents
+- [ ] **Second municipality** — spot-check Brampton to confirm MODULE_GUID differs
+      but structure is identical
+- [ ] **Pagination** — find a municipality with >100 open tenders, confirm `start=100`
+      works correctly
+- [ ] **Detail page HTML structure** — confirm which CSS selector contains the
+      scope/description text (update `_fetch_detail_description` if needed)
