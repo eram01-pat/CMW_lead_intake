@@ -213,21 +213,45 @@ def _extract_description_from_html(html: str) -> str:
     """
     Extract the tender scope description from the detail page.
 
-    The platform renders a labelled field layout like:
-      <td ...>Description:</td>
-      <td ...> actual text here </td>
-
-    We find the cell after the Description label and return its cleaned text.
+    Tries several patterns used by different versions of the eSolutionsGroup
+    bids&tenders platform, falling back gracefully.
     """
-    # Find the <td> that follows a cell containing "Description"
-    m = re.search(
-        r'<td[^>]*>\s*Description\s*:?\s*</td>\s*<td[^>]*>(.*?)</td>',
-        html, re.DOTALL | re.IGNORECASE,
-    )
-    if not m:
+    raw = ""
+
+    # Pattern 1: named div like categories uses (id="divDesc" or "divDescription")
+    for div_id in ("divDesc", "divDescription", "divScope"):
+        m = re.search(
+            r'<div[^>]*\bid="' + div_id + r'"[^>]*>(.*?)</div>',
+            html, re.DOTALL | re.IGNORECASE,
+        )
+        if m:
+            raw = m.group(1)
+            break
+
+    # Pattern 2: <td> label/value layout  "<td>Description:</td><td>...</td>"
+    if not raw:
+        m = re.search(
+            r'<td[^>]*>\s*Description\s*:?\s*</td>\s*<td[^>]*>(.*?)</td>',
+            html, re.DOTALL | re.IGNORECASE,
+        )
+        if m:
+            raw = m.group(1)
+
+    # Pattern 3: labelled <span> or <p> following a "Description" heading
+    if not raw:
+        m = re.search(
+            r'(?:Description|Scope\s+of\s+Work)\s*:?\s*</[^>]+>\s*<[^>]+>(.*?)</(?:p|span|div|td)>',
+            html, re.DOTALL | re.IGNORECASE,
+        )
+        if m:
+            raw = m.group(1)
+
+    if not raw:
+        # Emit a one-line debug snippet so we can identify the real structure next run
+        snippet = re.sub(r'\s+', ' ', html[:3000])
+        logger.debug("Description field not found; HTML head: %s", snippet[:500])
         return ""
-    raw = m.group(1)
-    # Strip HTML tags and collapse whitespace
+
     text = _strip_html(raw)
     text = re.sub(r"\s{2,}", " ", text).strip()
     return text
@@ -248,6 +272,15 @@ def _fetch_detail_page(
         time.sleep(rate_limit)
         categories = _extract_categories_from_html(r.text)
         description = _extract_description_from_html(r.text)
+        if not description and logger.isEnabledFor(logging.DEBUG):
+            # Emit surrounding context for any "description" occurrence so we can
+            # identify the correct HTML pattern from CI logs
+            for m in re.finditer(r'description', r.text, re.IGNORECASE):
+                pos = m.start()
+                logger.debug(
+                    "DESC-PROBE %s pos=%d: %r",
+                    detail_url, pos, r.text[max(0, pos-80):pos+200],
+                )
         return categories, description
     except Exception as exc:
         logger.debug("Detail fetch error %s: %s", detail_url, exc)
@@ -377,4 +410,12 @@ def collect(
             tenders.append(t)
 
     logger.info("%s: %d tenders collected", source_name, len(tenders))
+    # Log description extraction quality for the first tender (diagnostic)
+    if tenders:
+        sample = tenders[0]
+        logger.info(
+            "%s: sample description [%d chars]: %s",
+            source_name, len(sample.description),
+            (sample.description[:120] + "…") if len(sample.description) > 120 else (sample.description or "(empty)"),
+        )
     return tenders
