@@ -60,6 +60,10 @@ OUT OF SCOPE — answer NO if the tender is exclusively about:
 - Construction, renovation, or capital works (CMW cleans facilities, \
 does not build or renovate them)
 - Design, engineering, or consulting services
+- Procurement of vehicles, apparatus, or equipment (fire trucks, sweeper \
+machines, fleet vehicles — buying/leasing hardware, not a cleaning service)
+- Cooperative purchasing agreements, standing offers, or vendor-of-record \
+arrangements for goods (e.g. Canoe, Sourcewell, cooperative procurement notices)
 
 DECISION RULES:
 - YES: tender clearly involves one or more CMW services listed above.
