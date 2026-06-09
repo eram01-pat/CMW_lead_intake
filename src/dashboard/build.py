@@ -109,6 +109,7 @@ def build(
             "closing_date":     row.get("closing_date"),
             "confidence":       confidence,
             "llm_decision":     llm_decision,
+            "llm_reason":       row.get("llm_reason") or "",
             "snippet":          _snippet(row.get("description") or "", snippet_length),
             "is_new":           bool(first_seen and first_seen >= new_cutoff),
             "days_until_close": days,

@@ -88,7 +88,9 @@ Note: if the description is empty or uninformative, base your decision on the \
 title and bid categories alone.
 
 Could Canadian Mobile Wash plausibly bid on this tender?
-Answer with exactly one word: yes, no, or maybe.\
+Answer on exactly two lines:
+DECISION: yes / no / maybe
+REASON: one sentence (max 20 words) explaining why\
 """
 
 
@@ -98,14 +100,14 @@ def adjudicate(
     bid_categories: list[str],
     model: str,
     max_tokens: int,
-) -> Optional[str]:
+) -> tuple[Optional[str], Optional[str]]:
     """
-    Returns 'yes', 'no', 'maybe', or None on error/API key missing.
+    Returns (decision, reason) where decision is 'yes', 'no', 'maybe', or None on error.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         logger.debug("ANTHROPIC_API_KEY not set; skipping LLM pass")
-        return None
+        return None, None
 
     categories_text = ", ".join(bid_categories) if bid_categories else "None provided"
     description_text = description.strip() if description.strip() else "No description available."
@@ -130,20 +132,40 @@ def adjudicate(
                     }
                 ],
             )
-            answer = message.content[0].text.strip().lower().rstrip(".")
-            if answer not in ("yes", "no", "maybe"):
-                logger.warning("Unexpected LLM answer %r for %r — treating as maybe", answer, title)
-                return "maybe"
-            logger.info("LLM relevance [%s]: %s", answer.upper(), title[:80])
+            raw = message.content[0].text.strip()
+            decision, reason = _parse_response(raw, title)
+            logger.info("LLM relevance [%s]: %s", decision.upper(), title[:80])
             time.sleep(2.0)
-            return answer
+            return decision, reason
         except anthropic.RateLimitError:
             wait = 10 * (2 ** attempt)  # 10s, 20s, 40s, 80s
             logger.warning("Rate limited — waiting %ds before retry (attempt %d/4)", wait, attempt + 1)
             time.sleep(wait)
         except Exception as exc:
             logger.warning("LLM relevance pass failed: %s", exc)
-            return None
+            return None, None
 
     logger.warning("LLM relevance gave up after 4 rate-limit retries for %r", title)
-    return None
+    return None, None
+
+
+def _parse_response(raw: str, title: str) -> tuple[str, Optional[str]]:
+    """Parse DECISION/REASON lines from LLM response. Falls back gracefully."""
+    decision = "maybe"
+    reason: Optional[str] = None
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.lower().startswith("decision:"):
+            val = line.split(":", 1)[1].strip().lower().rstrip(".")
+            if val in ("yes", "no", "maybe"):
+                decision = val
+            else:
+                logger.warning("Unexpected DECISION value %r for %r — treating as maybe", val, title)
+        elif line.lower().startswith("reason:"):
+            reason = line.split(":", 1)[1].strip()
+    if reason is None:
+        # Model returned a single word — treat whole response as decision
+        single = raw.strip().lower().rstrip(".")
+        if single in ("yes", "no", "maybe"):
+            decision = single
+    return decision, reason

@@ -10,7 +10,7 @@ crawl:
 llm:
   enabled: true
   model: "claude-haiku-4-5-20251001"
-  max_tokens: 64
+  max_tokens: 150
 
 storage:
   # db_path unused — Neon connection comes from DATABASE_URL environment variable.
@@ -18,5 +18,5 @@ storage:
 
 dashboard:
   output_path: "docs/index.html"
-  closing_soon_days: 7
+  closing_soon_days: 14
   snippet_length: 400

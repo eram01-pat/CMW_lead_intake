@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS tenders (
     last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     llm_decision    TEXT,       -- 'yes' | 'no' | 'maybe'  (NULL = not yet adjudicated)
     llm_decided_at  TIMESTAMPTZ,
-    llm_model       TEXT
+    llm_model       TEXT,
+    llm_reason      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenders_source       ON tenders(source_id);
@@ -73,6 +74,10 @@ def init_db(db_path: str = "") -> None:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(DDL)
+            # Migrate existing tables that pre-date llm_reason column
+            cur.execute("""
+                ALTER TABLE tenders ADD COLUMN IF NOT EXISTS llm_reason TEXT
+            """)
 
 
 def upsert_tender(conn: PgConn, tender) -> tuple[bool, bool]:
@@ -141,15 +146,17 @@ def upsert_tender(conn: PgConn, tender) -> tuple[bool, bool]:
             return True, False
 
 
-def save_llm_decision(conn: PgConn, tender_id: str, decision: str, model: str) -> None:
+def save_llm_decision(
+    conn: PgConn, tender_id: str, decision: str, model: str, reason: str | None = None
+) -> None:
     """Persist the LLM adjudication result for a tender."""
     now = datetime.now(timezone.utc)
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE tenders
-               SET llm_decision = %s, llm_decided_at = %s, llm_model = %s
+               SET llm_decision = %s, llm_decided_at = %s, llm_model = %s, llm_reason = %s
              WHERE id = %s""",
-            (decision, now, model, tender_id),
+            (decision, now, model, reason, tender_id),
         )
 
 
@@ -164,7 +171,7 @@ def get_open_matched_tenders(conn: PgConn) -> list[dict]:
                 id, source_id, source_name, title, description,
                 category, reference_no, detail_url, status,
                 posted_date, closing_date, first_seen_at,
-                bid_categories, llm_decision
+                bid_categories, llm_decision, llm_reason
             FROM tenders
             WHERE status = 'Open'
               AND llm_decision IN ('yes', 'maybe')

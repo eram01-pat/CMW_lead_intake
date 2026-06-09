@@ -95,7 +95,7 @@ def run(args: argparse.Namespace) -> None:
         for tender in tenders:
             if args.dry_run:
                 # Dry-run: adjudicate but don't write anything
-                decision = adjudicate(
+                decision, reason = adjudicate(
                     title=tender.title,
                     description=tender.description,
                     bid_categories=tender.bid_categories,
@@ -105,8 +105,8 @@ def run(args: argparse.Namespace) -> None:
                 if decision in ("yes", "maybe"):
                     matched_count += 1
                     logger.info(
-                        "DRY-RUN [%s]: %s — %s",
-                        decision.upper(), source["name"], tender.title,
+                        "DRY-RUN [%s]: %s — %s | %s",
+                        decision.upper(), source["name"], tender.title, reason or "",
                     )
                 continue
 
@@ -121,7 +121,7 @@ def run(args: argparse.Namespace) -> None:
                     skipped_count += 1
                     continue
 
-                decision = adjudicate(
+                decision, reason = adjudicate(
                     title=tender.title,
                     description=tender.description,
                     bid_categories=tender.bid_categories,
@@ -130,7 +130,7 @@ def run(args: argparse.Namespace) -> None:
                 )
 
                 if decision:
-                    save_llm_decision(conn, tender.id, decision, llm_cfg["model"])
+                    save_llm_decision(conn, tender.id, decision, llm_cfg["model"], reason)
                     if decision in ("yes", "maybe"):
                         matched_count += 1
                         logger.info(
@@ -145,6 +145,7 @@ def run(args: argparse.Namespace) -> None:
                                 decision=decision,
                                 closing_date=tender.closing_date,
                                 reference_no=tender.reference_no,
+                                reason=reason,
                             )
 
         logger.info(

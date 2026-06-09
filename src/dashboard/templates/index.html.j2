@@ -85,7 +85,7 @@
         </div>
         <span class="badge badge-{{ t.confidence | lower }}">{{ t.confidence }}</span>
         {% if t.is_new %}<span class="badge badge-new">New</span>{% endif %}
-        {% if t.closing_soon %}<span class="badge badge-closing">Closes in {{ t.days_until_close }}d</span>{% endif %}
+        {% if t.closing_soon %}<span class="badge badge-closing">⚠ Closes in {{ t.days_until_close }}d</span>{% endif %}
       </div>
       <div class="meta-row">
         <span>&#127961; {{ t.source_name }}</span>
@@ -98,9 +98,8 @@
       <div class="snippet">{{ t.snippet | safe }}</div>
       {% endif %}
       <div class="ai-label">
-        AI assessment:
-        <span class="{{ t.llm_decision }}">{{ t.llm_decision | upper }}</span>
-        &mdash; Canadian Mobile Wash may have a role in this tender
+        AI assessment: <span class="{{ t.llm_decision }}">{{ t.llm_decision | upper }}</span>
+        {% if t.llm_reason %}&mdash; {{ t.llm_reason }}{% endif %}
       </div>
       {% if t.bid_categories %}
       <div class="bid-cats">
