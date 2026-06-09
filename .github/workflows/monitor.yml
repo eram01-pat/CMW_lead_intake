@@ -49,6 +49,9 @@ jobs:
       - name: Run pipeline
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          BIDS_USERNAME:      ${{ secrets.BIDS_USERNAME }}
+          BIDS_PASSWORD:      ${{ secrets.BIDS_PASSWORD }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             echo "=== DRY RUN MODE — no DB writes, no dashboard deploy ==="
@@ -57,13 +60,13 @@ jobs:
             python pipeline.py --ignore-errors
           fi
 
-      - name: Commit updated database
+      - name: Commit module endpoint cache
         if: github.event.inputs.dry_run != 'true'
         run: |
           git config user.name  "CMW Tender Bot"
           git config user.email "actions@github.com"
-          git add data/tenders.db data/module_endpoints.yaml
-          git diff --cached --quiet || git commit -m "chore: update tenders.db [skip ci]"
+          git add data/module_endpoints.yaml
+          git diff --cached --quiet || git commit -m "chore: update module_endpoints.yaml [skip ci]"
           git push
 
       - name: Upload Pages artifact

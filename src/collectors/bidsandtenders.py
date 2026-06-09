@@ -103,19 +103,67 @@ def _save_cache(cache: dict) -> None:
 
 # ── Playwright search ─────────────────────────────────────────────────────────
 
+def _try_login(page, base_url: str, username: str, password: str, timeout_ms: int) -> bool:
+    """
+    Attempt to login to the bids&tenders portal.
+    Returns True if login succeeded (or was already logged in), False on failure.
+    Failure is non-fatal — detail pages are still fetched, just without description.
+    """
+    from playwright.sync_api import TimeoutError as PWTimeout
+
+    login_url = f"{base_url}/Account/Login"
+    try:
+        page.goto(login_url, timeout=timeout_ms, wait_until="domcontentloaded")
+
+        # Check if already logged in (logout link present)
+        if page.locator("a[href*='Logout'], a[href*='logout'], a[href*='SignOut']").count() > 0:
+            logger.debug("Already logged in at %s", base_url)
+            return True
+
+        # Fill email — try several selector patterns the platform uses
+        email_sel = (
+            "input[name='Email'], input[name='email'], "
+            "input[type='email'], input[id='Email'], input[id='email']"
+        )
+        pwd_sel = "input[type='password']"
+        submit_sel = "button[type='submit'], input[type='submit']"
+
+        page.fill(email_sel, username, timeout=8_000)
+        page.fill(pwd_sel, password, timeout=5_000)
+        page.click(submit_sel, timeout=5_000)
+        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+
+        # Verify success: logout link should now be present
+        if page.locator("a[href*='Logout'], a[href*='logout'], a[href*='SignOut']").count() > 0:
+            logger.info("Login successful at %s", base_url)
+            return True
+
+        logger.warning("Login may have failed at %s — proceeding without auth", base_url)
+        return False
+
+    except PWTimeout:
+        logger.warning("Login timed out at %s — proceeding without auth", base_url)
+        return False
+    except Exception as exc:
+        logger.warning("Login error at %s: %s — proceeding without auth", base_url, exc)
+        return False
+
+
 def _fetch_via_playwright(
     base_url: str,
     source_id: str,
     user_agent: str,
     timeout_seconds: int,
     max_per_source: int,
+    login_username: str = "",
+    login_password: str = "",
 ) -> tuple[list[dict], str, dict]:
     """
     Load the listing page in headless Chromium, intercept every AJAX search
     response, and return (raw_items, module_guid, cookies_dict).
 
-    The browser executes the page JS which triggers the search POST
-    automatically. We capture all paginated responses.
+    If login_username and login_password are provided, logs in first so that
+    detail-page fetches can retrieve the full tender description.
     """
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
@@ -127,10 +175,13 @@ def _fetch_via_playwright(
         ctx = browser.new_context(user_agent=user_agent)
         page = ctx.new_page()
 
+        # Login before loading the listing page so auth cookies carry through
+        if login_username and login_password:
+            _try_login(page, base_url, login_username, login_password, timeout_seconds * 1000)
+
         def on_response(response):
             url = response.url
             if "/Tender/Search/" in url and response.request.method == "POST":
-                # Extract GUID from URL if not yet found
                 if not guid_found:
                     m = _GUID_RE.search(url)
                     if m:
@@ -155,14 +206,11 @@ def _fetch_via_playwright(
                 timeout=timeout_seconds * 1000,
                 wait_until="domcontentloaded",
             )
-            # Wait for the AJAX search to fire and return
             page.wait_for_load_state("networkidle", timeout=timeout_seconds * 1000)
         except PWTimeout:
             logger.warning("%s: page load timed out — using whatever was captured", source_id)
 
-        # Collect browser cookies for detail-page requests
         pw_cookies = {c["name"]: c["value"] for c in ctx.cookies()}
-
         browser.close()
 
     guid = guid_found[0] if guid_found else ""
@@ -356,11 +404,17 @@ def collect(
     timeout_seconds: int = 30,
     max_per_source: int = 0,
     fetch_detail_pages: bool = True,
+    login_username: str = "",
+    login_password: str = "",
 ) -> list[Tender]:
     """
     Collect open tenders from one bids&tenders.ca municipality.
     Uses Playwright (headless Chromium) to load the listing page so that
     page JavaScript runs and the AJAX search succeeds.
+
+    If login_username / login_password are provided, logs in before fetching
+    so that detail pages include the full tender description.
+
     Returns [] on unrecoverable error so the pipeline continues.
     """
     source_id   = source["id"]
@@ -376,6 +430,8 @@ def collect(
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
             max_per_source=max_per_source,
+            login_username=login_username,
+            login_password=login_password,
         )
     except Exception as exc:
         logger.error("%s: Playwright fetch failed: %s — skipping", source_name, exc)
