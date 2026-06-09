@@ -24,6 +24,7 @@ import yaml
 from src.collectors.bidsandtenders import collect
 from src.dashboard.build import build
 from src.matching.relevance import adjudicate
+from src.notifications.slack import post_match
 from src.storage.db import get_connection, init_db, save_llm_decision, upsert_tender
 
 logging.basicConfig(
@@ -136,6 +137,15 @@ def run(args: argparse.Namespace) -> None:
                             "MATCH [%s]: %s — %s",
                             decision.upper(), source["name"], tender.title[:80],
                         )
+                        if is_new:
+                            post_match(
+                                title=tender.title,
+                                source_name=source["name"],
+                                detail_url=tender.detail_url,
+                                decision=decision,
+                                closing_date=tender.closing_date,
+                                reference_no=tender.reference_no,
+                            )
 
         logger.info(
             "%s: %d tenders | %d new | %d matched | %d already decided",
