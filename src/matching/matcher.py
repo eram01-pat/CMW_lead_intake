@@ -139,12 +139,12 @@ def match_tender(
     Returns a Match if any keyword hits; None if no match.
     """
     cats_text = " ".join(tender.bid_categories)
-    search_text = f"{tender.title} {tender.description} {cats_text}"
-    norm_text = normalize(search_text)
+    norm_title = normalize(f"{tender.title} {tender.description}")
+    norm_cats  = normalize(cats_text)
 
     matched: list[dict] = []
     for kw in keywords:
-        if kw["_pattern"].search(norm_text):
+        if kw["_pattern"].search(norm_title) or kw["_pattern"].search(norm_cats):
             matched.append(kw)
 
     if not matched:
@@ -164,7 +164,7 @@ def match_tender(
         return None
 
     # ── Text disqualifiers ────────────────────────────────────────────────────
-    hits_disq, disq_action = _check_disqualifiers(search_text, disqualifiers)
+    hits_disq, disq_action = _check_disqualifiers(f"{tender.title} {tender.description}", disqualifiers)
 
     # Tier-1 hits survive text disqualifiers (downgraded, not suppressed)
     if hits_disq and disq_action == "suppress" and top_tier > 1:
