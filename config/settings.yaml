@@ -10,10 +10,8 @@ crawl:
   # Max tenders to fetch per source per run (0 = no limit). Useful for dev/test.
   max_per_source: 0
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-  # Fetch individual detail pages to extract bid category tags (<div id="divCat">).
-  # Categories are used for pre-filtering (suppress Medical/IT/etc.) and confidence
-  # boosting (Fleet/Maintenance/Public Works/etc.). Descriptions remain boilerplate.
-  # Cost: ~3s per new tender on first run; negligible on subsequent runs (cached).
+  # Fetch individual detail pages to extract bid categories and description text.
+  # Both are used for keyword matching and LLM relevance adjudication.
   fetch_detail_pages: true
 
 matching:
@@ -34,11 +32,9 @@ matching:
 
 llm:
   # Set to true to enable the Anthropic relevance pass (requires ANTHROPIC_API_KEY env var).
-  enabled: false
-  # Only run LLM on tenders that hit Tier-2 or Tier-3 keywords (never all tenders).
-  tiers_to_adjudicate: [2, 3]
+  enabled: true
   model: "claude-haiku-4-5-20251001"
-  max_tokens: 256
+  max_tokens: 64
   # LLM relevance bonus added to score when LLM says "yes"
   relevance_bonus: 8
 

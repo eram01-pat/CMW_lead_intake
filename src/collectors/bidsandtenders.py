@@ -209,22 +209,49 @@ def _extract_categories_from_html(html: str) -> list[str]:
     return categories
 
 
+def _extract_description_from_html(html: str) -> str:
+    """
+    Extract the tender scope description from the detail page.
+
+    The platform renders a labelled field layout like:
+      <td ...>Description:</td>
+      <td ...> actual text here </td>
+
+    We find the cell after the Description label and return its cleaned text.
+    """
+    # Find the <td> that follows a cell containing "Description"
+    m = re.search(
+        r'<td[^>]*>\s*Description\s*:?\s*</td>\s*<td[^>]*>(.*?)</td>',
+        html, re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return ""
+    raw = m.group(1)
+    # Strip HTML tags and collapse whitespace
+    text = _strip_html(raw)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text
+
+
 def _fetch_detail_page(
     session: requests.Session,
     detail_url: str,
     timeout: int,
     rate_limit: float,
-) -> list[str]:
+) -> tuple[list[str], str]:
+    """Returns (bid_categories, description_text). Both empty on error."""
     try:
         r = session.get(detail_url, timeout=timeout, headers={"Accept": "text/html,*/*"})
         if r.status_code != 200:
             logger.debug("Detail page %s returned %s", detail_url, r.status_code)
-            return []
+            return [], ""
         time.sleep(rate_limit)
-        return _extract_categories_from_html(r.text)
+        categories = _extract_categories_from_html(r.text)
+        description = _extract_description_from_html(r.text)
+        return categories, description
     except Exception as exc:
         logger.debug("Detail fetch error %s: %s", detail_url, exc)
-        return []
+        return [], ""
 
 
 # ── Item parsing ──────────────────────────────────────────────────────────────
@@ -261,15 +288,16 @@ def _parse_item(
         bid_type   = ref_no.split("-")[0] if ref_no else ""
 
         bid_categories: list[str] = []
+        description = ""
         if fetch_details:
-            bid_categories = _fetch_detail_page(session, detail_url, timeout, rate_limit)
+            bid_categories, description = _fetch_detail_page(session, detail_url, timeout, rate_limit)
 
         return Tender(
             id=_tender_id(source_id, platform_id),
             source_id=source_id,
             source_name=source_name,
             title=title,
-            description="",
+            description=description,
             category=bid_type,
             reference_no=ref_no,
             detail_url=detail_url,

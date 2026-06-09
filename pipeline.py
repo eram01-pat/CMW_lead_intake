@@ -100,19 +100,19 @@ def run(args: argparse.Namespace) -> None:
             relevance_label = None
 
             if llm_cfg.get("enabled") and tender:
-                # Determine if this tender has tier-2 or tier-3 hits
-                # (do a quick pre-check before paying for LLM)
-                from src.matching.matcher import keyword_pattern
+                # Pre-check: does this tender hit any keyword at all?
                 from src.matching.normalize import normalize
-                norm_text = normalize(f"{tender.title} {tender.description}")
+                norm_title = normalize(f"{tender.title} {tender.description}")
+                norm_cats  = normalize(" ".join(tender.bid_categories))
                 candidate_tiers = {
                     kw["tier"] for kw in keywords
-                    if kw["_pattern"].search(norm_text)
+                    if kw["_pattern"].search(norm_title) or kw["_pattern"].search(norm_cats)
                 }
-                if candidate_tiers and min(candidate_tiers) >= 2:
+                if candidate_tiers:
                     relevance_label = adjudicate(
                         title=tender.title,
                         description=tender.description,
+                        bid_categories=tender.bid_categories,
                         model=llm_cfg["model"],
                         max_tokens=llm_cfg["max_tokens"],
                     )
