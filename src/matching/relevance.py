@@ -88,9 +88,9 @@ Note: if the description is empty or uninformative, base your decision on the \
 title and bid categories alone.
 
 Could Canadian Mobile Wash plausibly bid on this tender?
-Answer on exactly two lines:
+Answer with:
 DECISION: yes / no / maybe
-REASON: one sentence (max 20 words) explaining why\
+REASON: one sentence (max 20 words) explaining why — only include this line if DECISION is yes or maybe\
 """
 
 
