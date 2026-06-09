@@ -142,9 +142,16 @@ def match_tender(
     norm_title = normalize(f"{tender.title} {tender.description}")
     norm_cats  = normalize(cats_text)
 
+    # Category matching is trusted only when the category list is focused
+    # (≤8 tags). Tenders with 9+ categories are broad taxonomy dumps where
+    # any single tag is unreliable as a scope signal.
+    cats_focused = len(tender.bid_categories) <= 8
+
     matched: list[dict] = []
     for kw in keywords:
-        if kw["_pattern"].search(norm_title) or kw["_pattern"].search(norm_cats):
+        title_hit = kw["_pattern"].search(norm_title)
+        cats_hit  = cats_focused and kw["_pattern"].search(norm_cats)
+        if title_hit or cats_hit:
             matched.append(kw)
 
     if not matched:
