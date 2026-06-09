@@ -100,13 +100,15 @@ def run(args: argparse.Namespace) -> None:
             relevance_label = None
 
             if llm_cfg.get("enabled") and tender:
-                # Pre-check: does this tender hit any keyword at all?
+                # Pre-check mirrors match_tender() logic exactly to avoid wasted LLM calls
                 from src.matching.normalize import normalize
+                _cats_focused = len(tender.bid_categories) <= 8
                 norm_title = normalize(f"{tender.title} {tender.description}")
                 norm_cats  = normalize(" ".join(tender.bid_categories))
                 candidate_tiers = {
                     kw["tier"] for kw in keywords
-                    if kw["_pattern"].search(norm_title) or kw["_pattern"].search(norm_cats)
+                    if kw["_pattern"].search(norm_title)
+                    or (_cats_focused and kw["_pattern"].search(norm_cats))
                 }
                 if candidate_tiers:
                     relevance_label = adjudicate(
