@@ -3,14 +3,10 @@ Parameterized collector for the bids&tenders.ca (eSolutionsGroup) platform.
 
 All 17 municipalities share this one collector — only base_url differs.
 
-Search API (GET — no CSRF token required for read-only search):
-  GET {base_url}/Module/Tenders/en/Tender/Search/{guid}
-      ?status=Open&limit=100&start=0&dir=ASC&from=&to=&sort=DateClosing+ASC,Id
-
-  Response: {"success": true, "data": [...], "total": N}
-  Dates: /Date(ms)/ — Unix milliseconds (ASP.NET JSON date format)
-
-Module GUIDs are pre-seeded in data/module_endpoints.yaml.
+The platform requires JavaScript execution before the search AJAX call will
+succeed (JS sets additional cookies / prepares state). We use Playwright
+(headless Chromium) to load the listing page once, intercept the AJAX
+response, and capture the JSON. Subsequent detail-page fetches use requests.
 """
 
 import hashlib
@@ -21,7 +17,6 @@ from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urljoin, urlparse
 
 import requests
 import yaml
@@ -37,9 +32,8 @@ _DETAIL_PATH  = "/Module/Tenders/en/Tender/Detail"
 _CACHE_FILE   = "data/module_endpoints.yaml"
 _PAGE_LIMIT   = 100
 
-_BOILERPLATE_RE = re.compile(r"only\s+online\s+submissions", re.IGNORECASE)
-_REF_PREFIX_RE  = re.compile(r"^([A-Z]{1,8}\d{2}-\d{2,5}[A-Z]?)\s*[-–]\s*", re.IGNORECASE)
-_GUID_RE        = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+_REF_PREFIX_RE = re.compile(r"^([A-Z]{1,8}\d{2}-\d{2,5}[A-Z]?)\s*[-–]\s*", re.IGNORECASE)
+_GUID_RE       = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
 # ── Date parsing ──────────────────────────────────────────────────────────────
@@ -95,51 +89,7 @@ def _extract_module_guid(html: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-# ── Session / requests helpers ────────────────────────────────────────────────
-
-def _make_session(user_agent: str) -> requests.Session:
-    s = requests.Session()
-    s.mount("https://", HTTPAdapter(max_retries=Retry(total=0, raise_on_status=False)))
-    s.mount("http://",  HTTPAdapter(max_retries=Retry(total=0, raise_on_status=False)))
-    s.headers.update({
-        "User-Agent":      user_agent,
-        "Accept-Language": "en-CA,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-    })
-    return s
-
-
-def _get_with_retry(
-    session: requests.Session,
-    url: str,
-    timeout: int,
-    max_retries: int,
-    backoff_base: float,
-    accept: str = "text/html,application/xhtml+xml,*/*",
-) -> requests.Response:
-    last: Optional[Exception] = None
-    for attempt in range(max_retries + 1):
-        try:
-            r = session.get(url, timeout=timeout, headers={"Accept": accept})
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
-                _backoff(attempt, backoff_base, r.status_code, url)
-                continue
-            r.raise_for_status()
-            return r
-        except requests.RequestException as exc:
-            last = exc
-            if attempt < max_retries:
-                _backoff(attempt, backoff_base, None, url)
-    raise RuntimeError(f"GET {url} failed after {max_retries + 1} attempts: {last}")
-
-
-def _backoff(attempt: int, base: float, status: Optional[int], url: str) -> None:
-    wait = base * (2 ** attempt)
-    logger.warning("HTTP %s from %s — backing off %.1fs", status or "err", url, wait)
-    time.sleep(wait)
-
-
-# ── Module GUID discovery ─────────────────────────────────────────────────────
+# ── GUID cache ────────────────────────────────────────────────────────────────
 
 def _load_cache() -> dict:
     p = Path(_CACHE_FILE)
@@ -151,98 +101,93 @@ def _save_cache(cache: dict) -> None:
     Path(_CACHE_FILE).write_text(yaml.dump(cache, default_flow_style=False))
 
 
-def _resolve_guid(
-    session: requests.Session,
+# ── Playwright search ─────────────────────────────────────────────────────────
+
+def _fetch_via_playwright(
     base_url: str,
     source_id: str,
-    timeout: int,
-    max_retries: int,
-    backoff_base: float,
-) -> str:
-    """Return the module GUID from cache or by scraping the listing page."""
-    cache = _load_cache()
-    if source_id in cache:
-        return cache[source_id]
-
-    listing_url = f"{base_url}{_LISTING_PATH}"
-    r = _get_with_retry(session, listing_url, timeout, max_retries, backoff_base)
-    guid = _extract_module_guid(r.text)
-    if not guid:
-        raise RuntimeError(
-            f"Could not find MODULE_GUID in {listing_url}. "
-            "Add it manually to data/module_endpoints.yaml."
-        )
-    cache[source_id] = guid
-    _save_cache(cache)
-    logger.info("%s: cached module GUID %s", source_id, guid)
-    return guid
-
-
-# ── Core search + pagination ──────────────────────────────────────────────────
-
-def _search_page(
-    session: requests.Session,
-    base_url: str,
-    guid: str,
-    start: int,
-    timeout: int,
-    max_retries: int,
-    backoff_base: float,
-) -> tuple[list[dict], int]:
-    url = (
-        f"{base_url}{_LISTING_PATH}/Tender/Search/{guid}"
-        f"?status=Open&limit={_PAGE_LIMIT}&start={start}"
-        f"&dir=ASC&from=&to=&sort=DateClosing+ASC%2CId"
-    )
-    r = _get_with_retry(
-        session, url, timeout, max_retries, backoff_base,
-        accept="application/json, text/javascript, */*; q=0.01",
-    )
-    ct = r.headers.get("Content-Type", "")
-    if "json" not in ct:
-        snippet = r.text[:400].replace("\n", " ").replace("\r", "")
-        raise RuntimeError(
-            f"Expected JSON from GET search, got {ct!r}\n"
-            f"  Status: {r.status_code}  URL: {url}\n"
-            f"  Body: {snippet!r}"
-        )
-    body = r.json()
-    return body.get("data") or [], int(body.get("total") or 0)
-
-
-def _fetch_all_pages(
-    session: requests.Session,
-    base_url: str,
-    guid: str,
-    timeout: int,
-    rate_limit: float,
-    max_retries: int,
-    backoff_base: float,
+    user_agent: str,
+    timeout_seconds: int,
     max_per_source: int,
-) -> list[dict]:
+) -> tuple[list[dict], str, dict]:
+    """
+    Load the listing page in headless Chromium, intercept every AJAX search
+    response, and return (raw_items, module_guid, cookies_dict).
+
+    The browser executes the page JS which triggers the search POST
+    automatically. We capture all paginated responses.
+    """
+    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+
     all_items: list[dict] = []
-    start = 0
+    guid_found: list[str] = []
 
-    while True:
-        items, total = _search_page(
-            session, base_url, guid,
-            start=start, timeout=timeout,
-            max_retries=max_retries, backoff_base=backoff_base,
-        )
-        all_items.extend(items)
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        ctx = browser.new_context(user_agent=user_agent)
+        page = ctx.new_page()
 
-        if max_per_source and len(all_items) >= max_per_source:
-            return all_items[:max_per_source]
-        if not items or len(all_items) >= total or len(items) < _PAGE_LIMIT:
-            break
+        def on_response(response):
+            url = response.url
+            if "/Tender/Search/" in url and response.request.method == "POST":
+                # Extract GUID from URL if not yet found
+                if not guid_found:
+                    m = _GUID_RE.search(url)
+                    if m:
+                        guid_found.append(m.group(0))
+                try:
+                    body = response.json()
+                    items = body.get("data") or []
+                    if items:
+                        all_items.extend(items)
+                        logger.info(
+                            "%s: captured %d items (total reported: %s)",
+                            source_id, len(items), body.get("total"),
+                        )
+                except Exception as exc:
+                    logger.debug("%s: could not parse AJAX response: %s", source_id, exc)
 
-        start += len(items)
-        time.sleep(rate_limit)
+        page.on("response", on_response)
 
-    return all_items
+        try:
+            page.goto(
+                f"{base_url}{_LISTING_PATH}",
+                timeout=timeout_seconds * 1000,
+                wait_until="domcontentloaded",
+            )
+            # Wait for the AJAX search to fire and return
+            page.wait_for_load_state("networkidle", timeout=timeout_seconds * 1000)
+        except PWTimeout:
+            logger.warning("%s: page load timed out — using whatever was captured", source_id)
+
+        # Collect browser cookies for detail-page requests
+        pw_cookies = {c["name"]: c["value"] for c in ctx.cookies()}
+
+        browser.close()
+
+    guid = guid_found[0] if guid_found else ""
+
+    if max_per_source and len(all_items) > max_per_source:
+        all_items = all_items[:max_per_source]
+
+    return all_items, guid, pw_cookies
 
 
 # ── Detail page ───────────────────────────────────────────────────────────────
+
+def _make_session(user_agent: str, cookies: dict) -> requests.Session:
+    s = requests.Session()
+    s.mount("https://", HTTPAdapter(max_retries=Retry(total=0, raise_on_status=False)))
+    s.mount("http://",  HTTPAdapter(max_retries=Retry(total=0, raise_on_status=False)))
+    s.headers.update({
+        "User-Agent":      user_agent,
+        "Accept-Language": "en-CA,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+    })
+    for name, value in cookies.items():
+        s.cookies.set(name, value)
+    return s
+
 
 def _extract_categories_from_html(html: str) -> list[str]:
     m = re.search(
@@ -353,7 +298,8 @@ def collect(
 ) -> list[Tender]:
     """
     Collect open tenders from one bids&tenders.ca municipality.
-    Uses GET requests only — no CSRF token, no POST, no WAF issues.
+    Uses Playwright (headless Chromium) to load the listing page so that
+    page JavaScript runs and the AJAX search succeeds.
     Returns [] on unrecoverable error so the pipeline continues.
     """
     source_id   = source["id"]
@@ -362,33 +308,30 @@ def collect(
 
     logger.info("Collecting %s", source_name)
 
-    session = _make_session(user_agent)
-
     try:
-        guid = _resolve_guid(
-            session, base_url, source_id,
-            timeout=timeout_seconds,
-            max_retries=max_retries,
-            backoff_base=backoff_base_seconds,
-        )
-    except Exception as exc:
-        logger.error("%s: could not resolve module GUID: %s — skipping", source_name, exc)
-        return []
-
-    try:
-        raw_items = _fetch_all_pages(
-            session=session,
+        raw_items, guid, pw_cookies = _fetch_via_playwright(
             base_url=base_url,
-            guid=guid,
-            timeout=timeout_seconds,
-            rate_limit=rate_limit_seconds,
-            max_retries=max_retries,
-            backoff_base=backoff_base_seconds,
+            source_id=source_id,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
             max_per_source=max_per_source,
         )
     except Exception as exc:
-        logger.error("%s: search failed: %s — skipping", source_name, exc)
+        logger.error("%s: Playwright fetch failed: %s — skipping", source_name, exc)
         return []
+
+    if not raw_items:
+        logger.warning("%s: no items captured from AJAX response", source_name)
+        return []
+
+    # Cache the GUID if discovered
+    if guid:
+        cache = _load_cache()
+        if source_id not in cache:
+            cache[source_id] = guid
+            _save_cache(cache)
+
+    session = _make_session(user_agent, pw_cookies)
 
     tenders: list[Tender] = []
     for item in raw_items:
