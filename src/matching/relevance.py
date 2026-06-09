@@ -79,6 +79,9 @@ Description:
 
 Bid categories: {categories}
 
+Note: if the description is empty or uninformative, base your decision on the \
+title and bid categories alone.
+
 Could Canadian Mobile Wash plausibly bid on this tender?
 Answer with exactly one word: yes, no, or maybe.\
 """
