@@ -7,13 +7,6 @@ crawl:
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
   fetch_detail_pages: true
 
-# bids&tenders.ca login credentials.
-# Set BIDS_USERNAME and BIDS_PASSWORD as GitHub Secrets (preferred).
-# Values below are fallback for local dev only — never commit real credentials here.
-login:
-  username: ""
-  password: ""
-
 llm:
   enabled: true
   model: "claude-haiku-4-5-20251001"

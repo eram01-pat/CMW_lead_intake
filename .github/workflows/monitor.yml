@@ -50,8 +50,6 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DATABASE_URL:       ${{ secrets.DATABASE_URL }}
-          BIDS_USERNAME:      ${{ secrets.BIDS_USERNAME }}
-          BIDS_PASSWORD:      ${{ secrets.BIDS_PASSWORD }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             echo "=== DRY RUN MODE — no DB writes, no dashboard deploy ==="

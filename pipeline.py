@@ -16,7 +16,6 @@ Run:
 
 import argparse
 import logging
-import os
 import sys
 from datetime import datetime, timezone
 
@@ -51,18 +50,7 @@ def run(args: argparse.Namespace) -> None:
     llm_cfg       = settings_cfg["llm"]
     storage_cfg   = settings_cfg["storage"]
     dashboard_cfg = settings_cfg["dashboard"]
-    login_cfg     = settings_cfg.get("login", {})
-
     db_path = storage_cfg.get("db_path", "")
-
-    # Login credentials — prefer env vars, fall back to settings.yaml
-    login_username = os.environ.get("BIDS_USERNAME", login_cfg.get("username", ""))
-    login_password = os.environ.get("BIDS_PASSWORD", login_cfg.get("password", ""))
-
-    if login_username:
-        logger.info("Login credentials present — descriptions will be fetched")
-    else:
-        logger.info("No login credentials — running without authentication (no descriptions)")
 
     if not args.dry_run:
         init_db(db_path)
@@ -89,8 +77,6 @@ def run(args: argparse.Namespace) -> None:
                 timeout_seconds=crawl["timeout_seconds"],
                 max_per_source=crawl["max_per_source"],
                 fetch_detail_pages=crawl.get("fetch_detail_pages", True),
-                login_username=login_username,
-                login_password=login_password,
             )
         except Exception as exc:
             logger.error("Unhandled error collecting %s: %s", source["id"], exc)
