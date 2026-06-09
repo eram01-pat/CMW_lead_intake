@@ -110,31 +110,40 @@ def adjudicate(
     categories_text = ", ".join(bid_categories) if bid_categories else "None provided"
     description_text = description.strip() if description.strip() else "No description available."
 
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=_SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": _USER_TEMPLATE.format(
-                        title=title,
-                        description=description_text[:2000],
-                        categories=categories_text,
-                    ),
-                }
-            ],
-        )
-        answer = message.content[0].text.strip().lower().rstrip(".")
-        if answer not in ("yes", "no", "maybe"):
-            logger.warning("Unexpected LLM answer %r for %r — treating as maybe", answer, title)
-            return "maybe"
-        logger.info("LLM relevance [%s]: %s", answer.upper(), title[:80])
-        time.sleep(1.0)  # stay comfortably under rate limits
-        return answer
-    except Exception as exc:
-        logger.warning("LLM relevance pass failed: %s", exc)
-        return None
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+
+    for attempt in range(4):
+        try:
+            message = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=_SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": _USER_TEMPLATE.format(
+                            title=title,
+                            description=description_text[:2000],
+                            categories=categories_text,
+                        ),
+                    }
+                ],
+            )
+            answer = message.content[0].text.strip().lower().rstrip(".")
+            if answer not in ("yes", "no", "maybe"):
+                logger.warning("Unexpected LLM answer %r for %r — treating as maybe", answer, title)
+                return "maybe"
+            logger.info("LLM relevance [%s]: %s", answer.upper(), title[:80])
+            time.sleep(2.0)
+            return answer
+        except anthropic.RateLimitError:
+            wait = 10 * (2 ** attempt)  # 10s, 20s, 40s, 80s
+            logger.warning("Rate limited — waiting %ds before retry (attempt %d/4)", wait, attempt + 1)
+            time.sleep(wait)
+        except Exception as exc:
+            logger.warning("LLM relevance pass failed: %s", exc)
+            return None
+
+    logger.warning("LLM relevance gave up after 4 rate-limit retries for %r", title)
+    return None
