@@ -8,6 +8,7 @@ could plausibly bid on the work described.
 
 import logging
 import os
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,7 @@ def adjudicate(
             logger.warning("Unexpected LLM answer %r for %r — treating as maybe", answer, title)
             return "maybe"
         logger.info("LLM relevance [%s]: %s", answer.upper(), title[:80])
+        time.sleep(0.5)  # stay comfortably under rate limits
         return answer
     except Exception as exc:
         logger.warning("LLM relevance pass failed: %s", exc)
