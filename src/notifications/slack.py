@@ -88,6 +88,66 @@ def post_match(
         logger.warning("Slack notification failed: %s", exc)
 
 
+def post_weekly_report(counts: dict, top_tenders: list[dict]) -> None:
+    """
+    Post a Friday weekly accuracy/activity report to Slack.
+    counts: {total, yes_count, maybe_count, no_count}
+    top_tenders: up to 5 open matched tenders sorted by closing date.
+    """
+    url = _webhook_url()
+    if not url:
+        logger.debug("SLACK_WEBHOOK_URL not set — skipping weekly report")
+        return
+
+    total    = counts.get("total", 0)
+    yes_c    = counts.get("yes_count", 0)
+    maybe_c  = counts.get("maybe_count", 0)
+    flagged  = yes_c + maybe_c
+    rejected = counts.get("no_count", 0)
+
+    lines = [f"📊 *CMW Weekly Tender Report — {date.today().strftime('%B %d, %Y')}*"]
+    lines.append(f"Claude reviewed *{total}* tender{'s' if total != 1 else ''} this week")
+    lines.append(
+        f"• *{flagged} flagged* ({yes_c} high confidence, {maybe_c} medium confidence)"
+    )
+    lines.append(f"• {rejected} rejected as out of scope")
+
+    if top_tenders:
+        lines.append("")
+        lines.append("*Open opportunities — closest deadlines:*")
+        for i, t in enumerate(top_tenders, 1):
+            days = _days_until(t.get("closing_date"))
+            emoji = "🟢" if t.get("llm_decision") == "yes" else "🟡"
+            if days is None:
+                deadline = "no closing date"
+            elif days == 0:
+                deadline = "⚠️ closes TODAY"
+            elif days <= CLOSING_SOON_DAYS:
+                deadline = f"⚠️ closes in {days}d"
+            else:
+                deadline = f"closes {t['closing_date']}"
+            lines.append(f"{i}. {emoji} <{t['detail_url']}|{t['title']}> ({t['source_name']}) — {deadline}")
+    else:
+        lines.append("")
+        lines.append("_No open matched tenders at this time._")
+
+    payload = {"text": "\n".join(lines)}
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req  = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status != 200:
+                logger.warning("Slack weekly report returned %s", resp.status)
+        logger.info("Slack weekly report posted")
+    except Exception as exc:
+        logger.warning("Slack weekly report failed: %s", exc)
+
+
 def post_digest(tenders: list[dict]) -> None:
     """
     Post a daily digest of all open matched tenders, sorted by closing date.

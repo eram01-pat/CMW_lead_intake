@@ -160,6 +160,38 @@ def save_llm_decision(
         )
 
 
+def get_weekly_stats(conn: PgConn) -> dict:
+    """
+    Return adjudication counts for the past 7 days and top open matched tenders
+    sorted by closing date for the weekly Slack report.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT
+                COUNT(*)                                             AS total,
+                COUNT(*) FILTER (WHERE llm_decision = 'yes')        AS yes_count,
+                COUNT(*) FILTER (WHERE llm_decision = 'maybe')      AS maybe_count,
+                COUNT(*) FILTER (WHERE llm_decision = 'no')         AS no_count
+            FROM tenders
+            WHERE llm_decided_at >= NOW() - INTERVAL '7 days'"""
+        )
+        counts = dict(cur.fetchone())
+
+        cur.execute(
+            """SELECT title, source_name, detail_url, closing_date, llm_decision, llm_reason
+            FROM tenders
+            WHERE status = 'Open'
+              AND llm_decision IN ('yes', 'maybe')
+            ORDER BY
+                CASE llm_decision WHEN 'yes' THEN 0 ELSE 1 END,
+                closing_date ASC NULLS LAST
+            LIMIT 5"""
+        )
+        top = [dict(r) for r in cur.fetchall()]
+
+    return {"counts": counts, "top_tenders": top}
+
+
 def get_open_matched_tenders(conn: PgConn) -> list[dict]:
     """
     Return all open tenders where LLM said yes or maybe, ordered for the dashboard.
