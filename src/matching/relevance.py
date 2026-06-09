@@ -24,10 +24,10 @@ tankers, garbage/refuse trucks, municipal fleet, construction equipment. \
 Includes exterior wash, undercarriage, degreasing, sanitization, decal removal.
 
 2. Commercial Property Cleaning — pressure/power washing and soft washing of \
-building exteriors, facades, brick, stone, concrete, masonry, storefronts, \
-canopies, and parking structures (underground garages, parkades, parking lots). \
-Includes catch basin cleaning, dumpster pad washing, garage bin washing, \
-dock door washing, bus shelter washing, and post-construction exterior cleaning.
+building interiors and exteriors, facades, brick, stone, concrete, masonry, \
+storefronts, canopies, and parking structures (underground garages, parkades, \
+parking lots). Includes catch basin cleaning, dumpster pad washing, garage bin \
+washing, dock door washing, bus shelter washing, and post-construction cleaning.
 
 3. Commercial Disinfection & Sanitization — disinfection of vehicles, \
 facilities, commercial interiors and surfaces.
@@ -38,9 +38,9 @@ and properties.
 5. Graffiti Removal — removal of graffiti and vandalism from any surface \
 (buildings, vehicles, fencing, signage).
 
-6. Line Painting & Pavement Marking — parking lot line marking, commercial \
-space markings, re-striping, custom stenciling. CMW does NOT do municipal \
-road or highway line marking (that is a separate specialized trade).
+6. Line Painting & Pavement Marking — parking lots, roads, and commercial \
+spaces; fresh markings, re-striping, custom stenciling, safety and \
+accessibility markings.
 
 7. Interior Warehouse Cleaning — floors, walls, ceilings, racking, beams, \
 vents, hard-to-reach areas, high dusting. Commercial and industrial warehouses, \
@@ -70,7 +70,6 @@ OUT OF SCOPE — answer NO if the tender is exclusively about any of the followi
 - Medical or biohazard cleaning
 - Food-service kitchen cleaning
 - Interior vehicle detailing (carpet, upholstery)
-- Municipal road or highway line marking
 
 DECISION RULES:
 - YES: tender clearly involves one or more CMW service lines.
