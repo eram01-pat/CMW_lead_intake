@@ -1,12 +1,9 @@
 """
-Optional LLM relevance pass (Anthropic API).
+LLM relevance adjudication (Anthropic API).
 
-Only runs when:
-  - settings.yaml: llm.enabled = true
-  - ANTHROPIC_API_KEY is set in the environment
-
-Called for any tender that hits a keyword match, to confirm or reject it.
-Title + description + bid categories are all sent for context.
+Called for every new tender in the LLM-first pipeline.
+Returns 'yes', 'no', or 'maybe' based on whether Canadian Mobile Wash
+could plausibly bid on the work described.
 """
 
 import logging
@@ -14,9 +11,6 @@ import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-# ── Prompts ───────────────────────────────────────────────────────────────────
-# TODO: finalize system prompt with CMW — placeholder below
 
 _SYSTEM_PROMPT = """\
 You are a bid-screening assistant for Canadian Mobile Wash (CMW), a \
@@ -44,8 +38,9 @@ and properties.
 5. Graffiti Removal — removal of graffiti and vandalism from any surface \
 (buildings, vehicles, fencing, signage).
 
-6. Line Painting & Pavement Marking — parking lots, roads, commercial spaces; \
-fresh markings, re-striping, custom stenciling.
+6. Line Painting & Pavement Marking — parking lot line marking, commercial \
+space markings, re-striping, custom stenciling. CMW does NOT do municipal \
+road or highway line marking (that is a separate specialized trade).
 
 7. Interior Warehouse Cleaning — floors, walls, ceilings, racking, beams, \
 vents, hard-to-reach areas, high dusting. Commercial and industrial warehouses, \
@@ -57,7 +52,11 @@ ceilings, loading areas, interior surfaces of refrigerated or frozen facilities.
 9. Decal Removal — lettering, graphics, adhesives, and residue from vehicles, \
 equipment, windows, and commercial surfaces.
 
-OUT OF SCOPE — answer NO only if the tender is exclusively about:
+OUT OF SCOPE — answer NO if the tender is exclusively about any of the following:
+- Construction, renovation, or capital works (building, demolition, structural)
+- Civil engineering, road construction, or infrastructure replacement
+- Design, engineering, or consulting services
+- General contracting or project management
 - Residential cleaning (houses, condos, apartments)
 - Interior office/janitorial/housekeeping services
 - Waste or garbage collection, hazardous waste disposal
@@ -71,14 +70,20 @@ OUT OF SCOPE — answer NO only if the tender is exclusively about:
 - Medical or biohazard cleaning
 - Food-service kitchen cleaning
 - Interior vehicle detailing (carpet, upholstery)
+- Municipal road or highway line marking
 
 DECISION RULES:
 - YES: tender clearly involves one or more CMW service lines.
-- MAYBE: tender is vague, bundles CMW work with out-of-scope work, or involves \
-a facility type (transit depot, public works yard, arena, community centre) \
-where CMW services are plausible but not explicitly stated. When in doubt, \
-answer MAYBE — it is better to flag a borderline opportunity than miss it.
-- NO: tender is exclusively out-of-scope with no plausible CMW angle.\
+- MAYBE: tender is for ongoing operations or maintenance at a facility type \
+where CMW services are plausible (transit depot, public works yard, operations \
+centre, arena, community centre) but the cleaning scope is not explicitly stated. \
+Also use MAYBE when a tender bundles CMW work with out-of-scope work. \
+When in doubt, answer MAYBE — it is better to flag a borderline opportunity \
+than miss it.
+- NO: tender is exclusively out-of-scope with no plausible CMW angle. \
+Construction and renovation tenders are NO even if the facility (e.g. community \
+centre, transit depot) is one CMW serves — CMW cleans facilities, it does not \
+build or renovate them.\
 """
 
 _USER_TEMPLATE = """\
