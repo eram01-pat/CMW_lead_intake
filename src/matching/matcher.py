@@ -192,7 +192,7 @@ def match_tender(
     if cat_boost:
         score += _CATEGORY_BOOST_SCORE
 
-    if relevance_label == "yes" and top_tier >= 2:
+    if relevance_label in ("yes", "maybe") and top_tier >= 2:
         score += relevance_bonus
 
     confidence = _confidence_from_score(score, confidence_thresholds)

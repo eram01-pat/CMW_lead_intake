@@ -197,3 +197,25 @@ keywords:
   - {keyword: "Multi-Year Cleaning Contract",        category: 6, tier: 3}
   - {keyword: "Operational Services",                category: 6, tier: 3}
   - {keyword: "Site Services",                       category: 6, tier: 3}
+
+  # ── Facility-type umbrella — catches large multi-service contracts ────────────
+  # A transit depot or operations yard RFP may never say "washing" in the title
+  # but CMW almost certainly belongs in the scope. Tier 2 so LLM adjudicates.
+
+  - {keyword: "Transit Depot",                       category: 6, tier: 2}
+  - {keyword: "Bus Garage",                          category: 6, tier: 2}
+  - {keyword: "Operations Depot",                    category: 6, tier: 2}
+  - {keyword: "Operations Yard",                     category: 6, tier: 2}
+  - {keyword: "Maintenance Depot",                   category: 6, tier: 2}
+  - {keyword: "Maintenance Yard",                    category: 6, tier: 2}
+  - {keyword: "Public Works Yard",                   category: 6, tier: 2}
+  - {keyword: "Public Works Facility",               category: 6, tier: 2}
+  - {keyword: "Works Yard",                          category: 6, tier: 2}
+  - {keyword: "Transit Operations Facility",         category: 6, tier: 2}
+  - {keyword: "Vehicle Storage Facility",            category: 6, tier: 2}
+  - {keyword: "Fleet Operations Facility",           category: 6, tier: 2}
+  - {keyword: "Sanitation Depot",                    category: 6, tier: 2}
+  - {keyword: "Waste Management Facility",           category: 6, tier: 2, notes: "not waste disposal — facility where trucks are stored/cleaned"}
+  - {keyword: "Community Centre",                    category: 6, tier: 3, notes: "exterior/parking cleaning angle; LLM must confirm"}
+  - {keyword: "Arena Facility",                      category: 6, tier: 3, notes: "exterior only; LLM screens out ice/interior"}
+  - {keyword: "Recreation Facility",                 category: 6, tier: 3, notes: "exterior/parking cleaning; LLM adjudicates"}
