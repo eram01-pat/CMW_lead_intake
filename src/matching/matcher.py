@@ -138,7 +138,8 @@ def match_tender(
     Run the full matching logic for a single tender.
     Returns a Match if any keyword hits; None if no match.
     """
-    search_text = f"{tender.title} {tender.description}"
+    cats_text = " ".join(tender.bid_categories)
+    search_text = f"{tender.title} {tender.description} {cats_text}"
     norm_text = normalize(search_text)
 
     matched: list[dict] = []
