@@ -7,14 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run — collect and match but skip DB write and dashboard deploy"
+        description: "Dry run — collect and match but skip DB write"
         type: boolean
         default: false
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: "tender-monitor"
@@ -23,9 +21,6 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    environment:
-      name: ${{ (github.event.inputs.dry_run == 'true') && 'dry-run' || 'github-pages' }}
-      url: ${{ steps.pages.outputs.page_url }}
 
     steps:
       - name: Checkout repository
@@ -52,7 +47,7 @@ jobs:
           SLACK_WEBHOOK_URL:   ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "=== DRY RUN MODE — no DB writes, no dashboard deploy ==="
+            echo "=== DRY RUN MODE — no DB writes ==="
             python pipeline.py --dry-run --ignore-errors
           else
             python pipeline.py --ignore-errors
@@ -67,14 +62,3 @@ jobs:
           git add data/module_endpoints.yaml
           git diff --cached --quiet || git commit -m "chore: update module_endpoints.yaml [skip ci]"
           git push
-
-      - name: Upload Pages artifact
-        if: github.event.inputs.dry_run != 'true'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs/
-
-      - name: Deploy to GitHub Pages
-        if: github.event.inputs.dry_run != 'true'
-        id: pages
-        uses: actions/deploy-pages@v4
