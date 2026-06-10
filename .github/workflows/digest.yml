@@ -2,8 +2,8 @@ name: CMW Daily Digest
 
 on:
   schedule:
-    # 9:00 AM Eastern on weekdays (13:00 UTC)
-    - cron: "0 13 * * 1-5"
+    # 11:00 AM Eastern on weekdays (15:00 UTC)
+    - cron: "0 15 * * 1-5"
   workflow_dispatch:
 
 permissions:

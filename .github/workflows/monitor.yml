@@ -2,9 +2,8 @@ name: CMW Tender Monitor
 
 on:
   schedule:
-    # 10:00 and 15:00 Eastern on weekdays (14:00 and 19:00 UTC)
-    - cron: "0 14 * * 1-5"
-    - cron: "0 19 * * 1-5"
+    # 6:00 AM Eastern on weekdays (10:00 UTC)
+    - cron: "0 10 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
