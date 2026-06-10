@@ -69,9 +69,15 @@ Facility & Infrastructure Cleaning:
 Line Painting (through partnering service — still flag these):
 - Parking lot line painting, road marking, pavement marking, re-striping, \
 custom stenciling, street sweeping
+- NOT in scope: sports field / athletic field marking (soccer, cricket, \
+baseball fields) — CMW's line painting covers roads, lots, and commercial \
+spaces only
 
 Post-Construction Cleaning:
-- Post-construction cleaning, construction site cleaning services
+- Post-construction cleaning, construction site cleaning services — ONLY when \
+explicitly mentioned in the title, description, or bid categories. Do NOT flag \
+construction or renovation tenders on the speculation that cleaning might be \
+needed afterward.
 
 OUT OF SCOPE — answer NO if the tender is exclusively about:
 - Residential cleaning (houses, condos, apartments) — note: CMW does not bid \
