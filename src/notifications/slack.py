@@ -67,7 +67,7 @@ def post_match(
         lines.append(f"Ref: {reference_no}")
     if closing_date:
         if closing_soon:
-            lines.append(f"⚠️ *Closes in {days} day{'s' if days != 1 else ''}* — {closing_date}")
+            lines.append(f"⏳ *Closes in {days} day{'s' if days != 1 else ''}* — {closing_date}")
         else:
             lines.append(f"Closes: {closing_date}")
     lines.append(f"<{detail_url}|View Tender →>")
@@ -121,9 +121,9 @@ def post_weekly_report(counts: dict, top_tenders: list[dict]) -> None:
             if days is None:
                 deadline = "no closing date"
             elif days == 0:
-                deadline = "⚠️ closes TODAY"
+                deadline = "⏳ closes TODAY"
             elif days <= CLOSING_SOON_DAYS:
-                deadline = f"⚠️ closes in {days}d"
+                deadline = f"⏳ closes in {days}d"
             else:
                 deadline = f"closes {t['closing_date']}"
             lines.append(f"{i}. {emoji} <{t['detail_url']}|{t['title']}> ({t['source_name']}) — {deadline}")
@@ -180,9 +180,9 @@ def post_digest(tenders: list[dict]) -> None:
             closing_str = ""
             if days is not None:
                 if days == 0:
-                    closing_str = " — ⚠️ *closes TODAY*"
+                    closing_str = " — ⏳ *closes TODAY*"
                 elif 0 < days <= CLOSING_SOON_DAYS:
-                    closing_str = f" — ⚠️ closes in {days}d"
+                    closing_str = f" — ⏳ closes in {days}d"
                 else:
                     closing_str = f" — closes {t['closing_date']}"
             reason_str = f"\n   _{t['llm_reason']}_" if t.get("llm_reason") else ""
