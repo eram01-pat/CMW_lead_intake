@@ -1,12 +1,13 @@
 # CMW Tender Monitor
 
-Automated monitor for Canadian Mobile Wash (CMW) that watches 17 Ontario
-municipal procurement portals, matches open tenders against CMW's service
-keywords, and publishes a daily dashboard of relevant opportunities.
+Automated monitor for Canadian Mobile Wash (CMW) that watches 35 Ontario
+public-sector procurement portals (municipalities, regions, and school
+boards), matches open tenders against CMW's service keywords, and publishes
+a daily dashboard of relevant opportunities.
 
 ## What it does
 
-1. **Collects** open tenders from 17 bids&tenders.ca portals (all same platform — one collector)
+1. **Collects** open tenders from 35 bids&tenders.ca portals (all same platform — one collector)
 2. **Matches** tenders against a tiered keyword library with disqualifier filtering
 3. **Publishes** a static HTML dashboard to GitHub Pages — no server required
 
