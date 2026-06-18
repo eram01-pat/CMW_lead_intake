@@ -108,11 +108,6 @@ run it commits any newly discovered GUIDs in `data/module_endpoints.yaml`
 | `config/sources.yaml`       | Add/remove a portal — one line per source                    |
 | `config/settings.yaml`      | Crawl rate limits, LLM model/toggle, dashboard options       |
 
-> **Legacy:** `config/keywords.yaml`, `config/disqualifiers.yaml`, and
-> `scripts/generate_keywords.py` belong to an earlier keyword-matching approach
-> and are **not used by the current LLM-first pipeline**. The matcher code under
-> `src/matching/matcher.py` is likewise retained for reference/tests only.
-
 ### Adding a source
 
 Edit `config/sources.yaml` — add one line under the appropriate section:
