@@ -2,20 +2,55 @@
 
 Automated monitor for Canadian Mobile Wash (CMW) that watches 35 Ontario
 public-sector procurement portals (municipalities, regions, and school
-boards), matches open tenders against CMW's service keywords, and publishes
-a daily dashboard of relevant opportunities.
+boards), uses Claude to judge whether each open tender is relevant to CMW's
+services, and publishes a daily dashboard of relevant opportunities.
 
 ## What it does
 
-1. **Collects** open tenders from 35 bids&tenders.ca portals (all same platform — one collector)
-2. **Matches** tenders against a tiered keyword library with disqualifier filtering
-3. **Publishes** a static HTML dashboard to GitHub Pages — no server required
+1. **Collects** open tenders from 35 bids&tenders.ca portals — municipalities,
+   regions, and school boards, all on the same eSolutionsGroup platform, so a
+   single parameterized collector handles every site.
+2. **Adjudicates** every new tender with Claude (`yes` / `no` / `maybe`) and
+   caches the decision in the database, so each tender is judged exactly once
+   and API cost stays flat as the database grows.
+3. **Publishes** a static HTML dashboard to GitHub Pages — no server required —
+   and optionally posts new matches to Slack.
 
 ## What it does NOT do
 
 - No bidding, no form submission, no document downloads, no login
-- Does not cover MERX, City of Ottawa, or City of Toronto (deliberately excluded)
+- Does not cover MERX, or the City of Ottawa / City of Toronto **municipal**
+  portals (deliberately excluded). Note: Toronto DSB is a separate school-board
+  portal and *is* covered.
 - Only reads publicly available pages while logged out
+
+---
+
+## Architecture
+
+```
+collect (Playwright) → store (Neon Postgres) → LLM adjudicates each new tender → dashboard (GitHub Pages)
+                                                          └→ Slack notification on new match
+```
+
+The collector loads each listing page in headless Chromium so the platform's
+JavaScript runs, intercepts the AJAX search response, and parses the tender
+JSON. Each municipality's search-endpoint GUID is discovered on first run and
+cached in `data/module_endpoints.yaml`.
+
+---
+
+## Sources (35)
+
+Defined in `config/sources.yaml`:
+
+- **Regions (5):** Peel, York, Durham, Halton, Waterloo
+- **Cities / Towns / Counties (20):** Vaughan, Brampton, Mississauga, Markham,
+  Richmond Hill, Aurora, Newmarket, Whitby, Pickering, Ajax, Oshawa, Burlington,
+  Oakville, Halton Hills, Hamilton, Niagara Falls, Kitchener, Waterloo, Guelph,
+  Oxford County (Woodstock)
+- **School Boards (10):** YRDSB, TDSB, DDSB, HDSB, HWDSB, WRDSB, YCDSB, DPCDSB,
+  DCDSB, HWCDSB
 
 ---
 
@@ -30,40 +65,39 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 2. Add the keyword file
+### 2. Configure secrets / environment
 
-Commit `data/CMW_Tender_Keywords.xlsx` (single column of keywords, provided by CMW).
-Then generate/merge into `config/keywords.yaml`:
+The pipeline reads these from the environment (set as GitHub Actions secrets in CI):
 
-```bash
-python scripts/generate_keywords.py
-```
+| Secret              | Required | Purpose                                                  |
+|---------------------|----------|----------------------------------------------------------|
+| `DATABASE_URL`      | Yes      | Neon Postgres connection string (tender + decision store) |
+| `ANTHROPIC_API_KEY` | Yes      | Claude relevance adjudication (run skips judging without it) |
+| `SLACK_WEBHOOK_URL` | Optional | Posts new matches to Slack                               |
 
-Review any `AUTO-ADDED` entries in `config/keywords.yaml` and set the correct `tier`
-and `category` for each. See the tier definitions in `config/keywords.yaml`.
-
-### 3. Configure GitHub Secrets
-
-| Secret              | Required | Purpose                                |
-|---------------------|----------|----------------------------------------|
-| `ANTHROPIC_API_KEY` | Optional | Enables LLM relevance pass for Tier-2/3 |
-
-### 4. Enable GitHub Pages
+### 3. Enable GitHub Pages
 
 In repository Settings → Pages → Source: **GitHub Actions**.
 
-### 5. Run manually
+### 4. Run manually
 
 ```bash
-# Full run (collects, matches, builds dashboard)
+# Full run (collect, adjudicate, build dashboard)
 python pipeline.py
 
 # Single source (for testing/debugging)
 python pipeline.py --source vaughan
 
-# Dry run (no DB writes, logs matches to stdout)
+# Dry run (no DB writes / no dashboard deploy; still calls the LLM and logs matches)
 python pipeline.py --dry-run
 ```
+
+### Scheduled runs
+
+`.github/workflows/monitor.yml` runs the pipeline automatically at
+**6:00 AM Eastern on weekdays** (and on manual `workflow_dispatch`). After each
+run it commits any newly discovered GUIDs in `data/module_endpoints.yaml`
+(tagged `[skip ci]`).
 
 ---
 
@@ -71,55 +105,57 @@ python pipeline.py --dry-run
 
 | File                        | What to edit                                                 |
 |-----------------------------|--------------------------------------------------------------|
-| `config/sources.yaml`       | Add/remove a municipality (one-line change)                  |
-| `config/keywords.yaml`      | Edit tiers, categories, or add keywords                      |
-| `config/disqualifiers.yaml` | Add/remove negative terms; confirm with CMW before changing  |
-| `config/settings.yaml`      | Rate limits, LLM toggle, confidence thresholds               |
+| `config/sources.yaml`       | Add/remove a portal — one line per source                    |
+| `config/settings.yaml`      | Crawl rate limits, LLM model/toggle, dashboard options       |
 
-### Adding a municipality
+> **Legacy:** `config/keywords.yaml`, `config/disqualifiers.yaml`, and
+> `scripts/generate_keywords.py` belong to an earlier keyword-matching approach
+> and are **not used by the current LLM-first pipeline**. The matcher code under
+> `src/matching/matcher.py` is likewise retained for reference/tests only.
 
-Edit `config/sources.yaml` — add one line:
+### Adding a source
+
+Edit `config/sources.yaml` — add one line under the appropriate section:
 ```yaml
 - {id: newcity, name: "City of New City", base_url: "https://newcity.bidsandtenders.ca"}
 ```
-That's all. The collector handles it automatically.
+That's all. The collector discovers the endpoint GUID and handles the rest
+automatically.
 
-### Tuning the matcher
+### Tuning relevance
 
-Keywords are tagged with:
-- **tier**: 1 (high-precision, auto-flag), 2 (disambiguate), 3 (broad-net, Review bucket)
-- **category**: 1–6 (fleet, parkade, pressure-wash, graffiti, industrial, umbrella)
+Relevance is decided by Claude using the system prompt in
+`src/matching/relevance.py`, which enumerates CMW's in-scope services and
+explicit out-of-scope exclusions.
 
-**If the dashboard is too noisy:** move keywords to a higher tier or add disqualifiers.
-**If real opportunities are being missed:** move keywords to a lower tier or add variants.
+- **Too noisy:** tighten the OUT OF SCOPE list or decision rules in the prompt.
+- **Missing real opportunities:** broaden the in-scope service list or relax the
+  MAYBE rule.
 
 ---
 
 ## State persistence
 
-**v1 choice:** `data/tenders.db` (SQLite) is committed back to the repo after each run.
-
-Tradeoff: ~17 noisy commits/week (tagged `[skip ci]`), but zero extra infrastructure and
-full history. The schema is designed so a later move to Postgres is a connection-string
-change in `src/storage/db.py`.
-
-**Phase-2 alternative:** restore/store the DB as a GitHub Actions artifact or use the
-Actions cache — removes the commit noise but loses the history outside of artifacts.
+Tenders and their cached LLM decisions live in **Neon Postgres**, reached via
+the `DATABASE_URL` environment variable (`src/storage/db.py`). Nothing about the
+database is committed to the repo — the only file written back after a run is
+`data/module_endpoints.yaml` (the discovered GUID cache), committed with
+`[skip ci]`.
 
 ---
 
-## LLM relevance pass (optional)
+## LLM relevance pass
 
-Set `llm.enabled: true` in `config/settings.yaml` and provide `ANTHROPIC_API_KEY`.
+Every new tender is sent to Claude exactly once (model set in
+`config/settings.yaml`, default `claude-haiku-4-5`). The model answers
+`yes` / `no` / `maybe` plus a one-line reason, and the decision is cached so
+subsequent runs skip already-judged tenders.
 
-The LLM pass only runs on Tier-2 and Tier-3 candidates (never every tender) to keep
-cost bounded. It asks Claude whether exterior/fleet/pressure washing is plausibly in
-scope for the tender, and uses the answer to confirm/downgrade ambiguous matches.
+- `yes` / `maybe` → surfaced on the dashboard (and Slack, if configured)
+- `no` → stored but kept off the main feed
 
-With the LLM disabled:
-- Tier-1 hits → High confidence (unchanged)
-- Tier-2 hits → Medium confidence (pass disqualifiers)
-- Tier-3-only hits → Review bucket (never main feed)
+If `ANTHROPIC_API_KEY` is unset, the adjudication step is skipped and tenders
+are stored without a decision.
 
 ---
 
@@ -128,16 +164,16 @@ With the LLM disabled:
 See `ACCESS_NOTES.md` for platform discovery notes and the verification checklist
 that must be completed before first production run.
 
-If a source breaks (structure change), it logs an error and continues with remaining
-sources. The pipeline exits with code 2 if any sources failed (unless `--ignore-errors`
-is passed in CI).
+If a source breaks (structure change), it logs an error and continues with the
+remaining sources. The pipeline exits with code 2 if any source failed (unless
+`--ignore-errors` is passed, as it is in CI).
 
 ---
 
 ## Phase-2 upgrade paths (not built in v1)
 
 - **Interactive dashboard**: mark tenders reviewed/dismissed, shared state across
-  team — requires a small backend (FastAPI) + persistent DB (Postgres)
-- **Email digest**: daily summary of High/Medium matches — thin add-on over same data
-- **LLM detail-page enrichment**: fetch tender detail pages for tenders that only had
-  a listing-level description
+  the team — requires a small backend (FastAPI) over the existing Postgres DB
+- **Email digest**: daily summary of new matches — thin add-on over the same data
+- **LLM detail-page enrichment**: fetch tender detail pages for tenders that only
+  had a listing-level description
