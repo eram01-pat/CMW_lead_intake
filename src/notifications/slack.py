@@ -52,10 +52,17 @@ def post_match(
         logger.debug("SLACK_WEBHOOK_URL not set — skipping notification")
         return
 
+    days = _days_until(closing_date)
+
+    # Don't alert about a tender whose deadline has already passed — it's not a
+    # real opportunity, just noise.
+    if days is not None and days < 0:
+        logger.debug("Tender %r already closed (%s) — skipping notification", title, closing_date)
+        return
+
     confidence = "High" if decision == "yes" else "Medium"
     emoji      = "🟢" if decision == "yes" else "🟡"
 
-    days = _days_until(closing_date)
     closing_soon = days is not None and 0 <= days <= CLOSING_SOON_DAYS
 
     lines = [f"{emoji} *NEW TENDER — {confidence} Confidence*"]
@@ -66,7 +73,9 @@ def post_match(
     if reference_no:
         lines.append(f"Ref: {reference_no}")
     if closing_date:
-        if closing_soon:
+        if days == 0:
+            lines.append(f"⏳ *Closes today* — {closing_date}")
+        elif closing_soon:
             lines.append(f"⏳ *Closes in {days} day{'s' if days != 1 else ''}* — {closing_date}")
         else:
             lines.append(f"Closes: {closing_date}")
@@ -120,6 +129,8 @@ def post_weekly_report(counts: dict, top_tenders: list[dict]) -> None:
             emoji = "🟢" if t.get("llm_decision") == "yes" else "🟡"
             if days is None:
                 deadline = "no closing date"
+            elif days < 0:
+                deadline = "closed"
             elif days == 0:
                 deadline = "⏳ closes TODAY"
             elif days <= CLOSING_SOON_DAYS:
