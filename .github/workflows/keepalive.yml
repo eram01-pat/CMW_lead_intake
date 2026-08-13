@@ -3,8 +3,6 @@ on:
   schedule:
     - cron: '13 3 * * SUN'
   workflow_dispatch:
-  push:
-    paths: [.github/workflows/keepalive.yml]
 permissions:
   actions: write
   contents: write
