@@ -1,0 +1,9 @@
+# Dependencies for the on-demand industry classification run
+# (.github/workflows/classify_industries.yml).
+#
+# Kept separate from requirements.txt on purpose: the daily monitor's
+# dependency set is not modified by this analysis tool. No Playwright here —
+# the classifier reads the database, it does not crawl.
+anthropic>=1.0.0
+psycopg2-binary>=2.9.9
+openpyxl>=3.1.2

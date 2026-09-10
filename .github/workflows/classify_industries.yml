@@ -1,0 +1,111 @@
+# One-off / on-demand analysis: categorise every tender in the database by
+# industry and publish an Excel summary as a run artifact.
+#
+# Manual dispatch ONLY — there is deliberately no `schedule:` trigger, so this
+# never runs alongside or interferes with the daily monitor. It reads the
+# tenders table read-only, writes only to its own `tender_industry` cache
+# table, commits nothing, and does not touch the dashboard.
+name: Classify Tenders by Industry
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Claude model to classify with"
+        type: choice
+        default: "claude-opus-5"
+        options:
+          - "claude-opus-5"
+          - "claude-sonnet-5"
+          - "claude-haiku-4-5"
+      effort:
+        description: "Reasoning effort"
+        type: choice
+        default: "low"
+        options: ["low", "medium", "high"]
+      status:
+        description: "Statuses to include, comma separated (blank = all)"
+        type: string
+        default: ""
+      limit:
+        description: "Max tenders to classify this run (0 = no limit)"
+        type: string
+        default: "0"
+      batch_size:
+        description: "Tenders per API request"
+        type: string
+        default: "25"
+      workers:
+        description: "Concurrent API requests"
+        type: string
+        default: "4"
+      force:
+        description: "Re-classify everything, ignoring cached results"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Dry run — report what would be classified, make no API calls"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "tender-industry-classification"
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-classify.txt
+
+      - name: Classify tenders by industry
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
+        run: |
+          python classify_industries.py \
+            --output "tender_industries.xlsx" \
+            --summary-md "summary.md" \
+            --model "${{ inputs.model }}" \
+            --effort "${{ inputs.effort }}" \
+            --status "${{ inputs.status }}" \
+            --limit "${{ inputs.limit }}" \
+            --batch-size "${{ inputs.batch_size }}" \
+            --workers "${{ inputs.workers }}" \
+            ${{ inputs.force == true && '--force' || '' }} \
+            ${{ inputs.dry_run == true && '--dry-run' || '' }}
+
+      - name: Publish summary to the run page
+        if: always()
+        run: |
+          if [ -f summary.md ]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary produced — see the job log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Excel report
+        if: hashFiles('tender_industries.xlsx') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: tender-industries-${{ github.run_number }}
+          path: tender_industries.xlsx
+          retention-days: 90
+          if-no-files-found: error
