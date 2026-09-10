@@ -159,6 +159,7 @@ def main() -> int:
 
         results = {}
         failed_ids: list[str] = []
+        attempted = len(pending)
 
         if pending:
             def checkpoint(batch_results) -> None:
@@ -257,6 +258,17 @@ def main() -> int:
         logger.warning(
             "%d tender(s) were not classified — re-run to retry them.", unclassified_pending
         )
+
+    # A run that mostly failed still writes a report (the successful rows are
+    # cached and worth keeping) but must not be reported as a green run — the
+    # workbook would be dominated by Other / Unclassified.
+    if attempted and len(failed_ids) / attempted > 0.10:
+        logger.error(
+            "%d of %d attempted tenders (%.0f%%) could not be classified — the report is "
+            "incomplete. The successful ones are cached; re-run to retry the rest.",
+            len(failed_ids), attempted, 100 * len(failed_ids) / attempted,
+        )
+        return 1
     return 0
 
 

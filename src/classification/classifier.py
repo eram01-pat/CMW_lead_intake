@@ -195,9 +195,13 @@ def _render_batch(items: Sequence[dict]) -> str:
 
         blocks.append("\n".join(lines))
 
+    count = len(items)
     return (
-        "Classify each of the following "
-        f"{len(items)} tenders.\n\n" + "\n\n".join(blocks)
+        f"Classify each of the following {count} tenders.\n\n"
+        + "\n\n".join(blocks)
+        + f"\n\nReturn exactly {count} objects in \"classifications\" — one for each "
+          f"tender above, with \"ref\" running from 1 to {count}. Do not stop after "
+          f"the first one; every tender listed must appear exactly once."
     )
 
 
@@ -374,25 +378,47 @@ def classify(
     failed_ids: list[str] = []
     done = 0
 
-    def run_batch(index_and_batch: tuple[int, list[dict]]) -> None:
-        nonlocal done
-        index, batch = index_and_batch
+    def attempt(chunk: list[dict]) -> tuple[list[Classification], list[dict]]:
+        """One request. Returns (classifications, items the model did not answer)."""
         try:
             payload = _call_with_retry(
                 client,
                 model=model,
                 effort=effort,
                 max_tokens=max_tokens,
-                items=batch,
+                items=chunk,
                 max_attempts=max_attempts,
             )
-            results = _parse_batch(payload, batch)
-        except Exception as exc:  # noqa: BLE001 — one bad batch must not kill the run
-            logger.error("Batch %d failed permanently: %s", index + 1, exc)
-            results = []
+        except Exception as exc:  # noqa: BLE001 — one bad request must not kill the run
+            logger.error("Request for %d tender(s) failed permanently: %s", len(chunk), exc)
+            return [], list(chunk)
 
-        returned = {r.tender_id for r in results}
-        missing = [item["id"] for item in batch if item["id"] not in returned]
+        results = _parse_batch(payload, chunk)
+        answered = {r.tender_id for r in results}
+        return results, [item for item in chunk if item["id"] not in answered]
+
+    def run_batch(index_and_batch: tuple[int, list[dict]]) -> None:
+        nonlocal done
+        index, batch = index_and_batch
+
+        results, unanswered = attempt(batch)
+
+        # A structured-output array has no enforceable minimum length, so the
+        # model can return fewer entries than it was given. Rather than write
+        # those tenders off, re-ask for each one on its own — a single-item
+        # request has nothing to truncate.
+        if unanswered and len(batch) > 1:
+            logger.info(
+                "Batch %d: model answered %d/%d — re-asking for %d tender(s) individually",
+                index + 1, len(results), len(batch), len(unanswered),
+            )
+            for item in list(unanswered):
+                single_results, single_missing = attempt([item])
+                results.extend(single_results)
+                if not single_missing:
+                    unanswered.remove(item)
+
+        missing = [item["id"] for item in unanswered]
 
         with lock:
             all_results.extend(results)

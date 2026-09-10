@@ -102,7 +102,9 @@ jobs:
           fi
 
       - name: Upload Excel report
-        if: hashFiles('tender_industries.xlsx') != ''
+        # always(): a partially-successful run exits non-zero but its
+        # workbook is still worth having.
+        if: always() && hashFiles('tender_industries.xlsx') != ''
         uses: actions/upload-artifact@v4
         with:
           name: tender-industries-${{ github.run_number }}
