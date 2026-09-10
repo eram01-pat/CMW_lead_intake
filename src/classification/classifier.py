@@ -43,6 +43,25 @@ _BOILERPLATE_MARKERS = (
 
 _MAX_DESCRIPTION_CHARS = 600
 
+# output_config.effort is only accepted by these model families. Sending it to
+# a model that does not support it (Haiku 4.5, Sonnet 4.5, and older) is a 400,
+# so it is omitted for those rather than failing every batch.
+_EFFORT_SUPPORTED_PREFIXES = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+
+def supports_effort(model: str) -> bool:
+    return model.startswith(_EFFORT_SUPPORTED_PREFIXES)
+
 
 @dataclass
 class Classification:
@@ -192,8 +211,15 @@ def _call_with_retry(
     import anthropic
 
     last_exc: Optional[Exception] = None
+    send_effort = supports_effort(model)
+    if not send_effort:
+        logger.debug("%s does not accept output_config.effort — omitting it", model)
 
     for attempt in range(max_attempts):
+        output_config: dict[str, Any] = {"format": _response_schema(len(items))}
+        if send_effort:
+            output_config["effort"] = effort
+
         try:
             response = client.messages.create(
                 model=model,
@@ -205,10 +231,7 @@ def _call_with_retry(
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
-                output_config={
-                    "effort": effort,
-                    "format": _response_schema(len(items)),
-                },
+                output_config=output_config,
                 messages=[{"role": "user", "content": _render_batch(items)}],
             )
             if response.stop_reason == "max_tokens":
@@ -236,6 +259,12 @@ def _call_with_retry(
             time.sleep(wait)
         except anthropic.APIStatusError as exc:
             last_exc = exc
+            if exc.status_code == 400 and send_effort and "effort" in str(exc).lower():
+                # Model does not accept output_config.effort after all —
+                # drop it and retry rather than failing the whole run.
+                logger.warning("%s rejected output_config.effort — retrying without it", model)
+                send_effort = False
+                continue
             if exc.status_code < 500:
                 raise
             wait = min(30.0, 2.0 * (2**attempt)) + random.uniform(0, 1)
