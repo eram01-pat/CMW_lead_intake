@@ -35,6 +35,28 @@ _DECISION_LABELS = {
 _NOT_JUDGED = "Not judged"
 
 
+# These categories describe who performs the work, not what the work is about:
+# an environmental assessment for a watermain is filed under consulting, which
+# hides it from the demand figures for water infrastructure. Where such a tender
+# names a subject in secondary_industry, the "Demand by Sector" sheet credits the
+# subject instead. Everything else keeps its primary industry.
+_REATTRIBUTABLE = frozenset({
+    "Engineering & Design Consulting",
+    "Architecture & Planning",
+    "Surveying & Geotechnical",
+    "Research, Studies & Policy Consulting",
+})
+
+
+def effective_sector(row: dict) -> tuple[str, bool]:
+    """Return (sector, was_reattributed) for the demand view."""
+    industry = row["industry"]
+    secondary = row.get("secondary_industry")
+    if industry in _REATTRIBUTABLE and secondary:
+        return secondary, True
+    return industry, False
+
+
 def _write_sheet(
     ws,
     headers: Sequence[str],
@@ -155,6 +177,43 @@ def build_workbook(
         group_rows,
         widths=[36, 12, 12],
         percent_columns=[3],
+        total_row=True,
+    )
+
+    # ── Demand by sector (consulting credited to its subject) ────────────
+    direct: Counter[str] = Counter()
+    reattributed: Counter[str] = Counter()
+    for row in rows:
+        sector, moved = effective_sector(row)
+        (reattributed if moved else direct)[sector] += 1
+
+    sector_totals = {
+        sector: direct.get(sector, 0) + reattributed.get(sector, 0)
+        for sector in set(direct) | set(reattributed)
+    }
+    ws = wb.create_sheet("Demand by Sector")
+    sector_rows = [
+        [
+            sector,
+            group_for(sector),
+            direct.get(sector, 0),
+            reattributed.get(sector, 0),
+            total_for_sector,
+            _share(total_for_sector, total),
+        ]
+        for sector, total_for_sector in sorted(
+            sector_totals.items(), key=_industry_sort_key
+        )
+    ]
+    sector_rows.append(["TOTAL", "", sum(direct.values()), sum(reattributed.values()),
+                        total, _share(total, total)])
+    _write_sheet(
+        ws,
+        ["Sector", "Group", "Classified directly", "Re-attributed from consulting/design",
+         "Total", "% of Total"],
+        sector_rows,
+        widths=[44, 34, 18, 22, 12, 12],
+        percent_columns=[6],
         total_row=True,
     )
 
@@ -323,6 +382,32 @@ def write_markdown_summary(rows: Sequence[dict], path: str, *, run_metadata: dic
         key=lambda item: (-item[1], GROUPS.index(item[0]) if item[0] in GROUPS else len(GROUPS)),
     ):
         lines.append(f"| {group} | {count:,} | {100 * _share(count, total):.1f}% |")
+
+    direct: Counter[str] = Counter()
+    reattributed: Counter[str] = Counter()
+    for row in rows:
+        sector, moved = effective_sector(row)
+        (reattributed if moved else direct)[sector] += 1
+    sector_totals = {
+        sector: direct.get(sector, 0) + reattributed.get(sector, 0)
+        for sector in set(direct) | set(reattributed)
+    }
+
+    lines += [
+        "",
+        "### Demand by sector",
+        "",
+        "Consulting and design tenders credited to the subject they are about, "
+        "where they named one.",
+        "",
+        "| Sector | Direct | Re-attributed | Total | % of total |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for sector, count in sorted(sector_totals.items(), key=_industry_sort_key):
+        lines.append(
+            f"| {sector} | {direct.get(sector, 0):,} | {reattributed.get(sector, 0):,} | "
+            f"{count:,} | {100 * _share(count, total):.1f}% |"
+        )
 
     lines += [
         "",

@@ -79,6 +79,7 @@ no limit — the 100 already done are cached and are not paid for twice.
 |---|---|
 | **Summary by Industry** | The headline: every industry with its tender count and share of the total |
 | **Summary by Group** | The same rolled up into 9 broad groups |
+| **Demand by Sector** | The demand view: consulting and design tenders credited to the subject they are about (an EA for a watermain counts as water infrastructure, not consulting), with the direct and re-attributed counts shown separately |
 | **Group by Source** | Cross-tab of issuing municipality/board against group |
 | **Industry vs CMW Decision** | Each industry against the pipeline's existing yes/maybe/no relevance calls — shows which industries the daily monitor is actually surfacing |
 | **Confidence** | How sure the model was, overall |
@@ -127,6 +128,22 @@ run loses at most one batch.
 Failed batches are deliberately **not** cached — re-running retries them.
 
 ---
+
+### Primary vs. secondary: two different questions
+
+The primary industry answers **who performs the work** — an engineering firm wins
+a watermain environmental assessment, not a pipe contractor. That is the right
+axis for bid screening, but it hides subject matter: roughly a third of the
+"Engineering & Design Consulting" bucket is water and sewer work.
+
+`secondary_industry` carries the subject where the tender names one, and the
+**Demand by Sector** sheet uses it to re-attribute consulting and design tenders
+to what they are actually about. Use *Summary by Industry* to see who competes
+for the work, and *Demand by Sector* to see where the demand sits.
+
+The categories treated as re-attributable are listed in `_REATTRIBUTABLE` in
+`src/classification/report.py`. Changing that list only affects report
+generation — no re-classification and no API calls.
 
 ## Changing the categories
 
