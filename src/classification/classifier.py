@@ -125,9 +125,12 @@ def _response_schema(batch_size: int) -> dict[str, Any]:
             "type": "object",
             "properties": {
                 "classifications": {
+                    # No minItems/maxItems: the structured-output validator only
+                    # accepts 0 or 1 for those, so pinning them to the batch size
+                    # is rejected with a 400. Completeness is asked for in the
+                    # prompt instead, and _parse_batch treats any tender the model
+                    # skips as unclassified — left uncached so a re-run retries it.
                     "type": "array",
-                    "minItems": batch_size,
-                    "maxItems": batch_size,
                     "items": {
                         "type": "object",
                         "properties": {
